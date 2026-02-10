@@ -1,0 +1,39 @@
+scripts:
+  - id: "late_night_nagging"
+    text: "两点了还不睡？这种由于缺乏睡眠导致的内分泌失调是不可逆的哦。"
+    conditions:
+      time_start: "02:00"
+      time_end: "05:00"
+      probability: 0.8
+      cooldown_minutes: 30
+    tts:
+      voice_override: null
+      rate: "-10%"
+    animation:
+      speed: "slow"
+      sprite: "worried.gif"
+
+  - id: "lunch_break"
+    text: "如果不去吃饭的话，下午的代码质量会下降 30%。"
+    conditions:
+      time_start: "12:00"
+      time_end: "13:00"
+      probability: 0.6
+      cooldown_minutes: 60
+    tts:
+      rate: "+0%"
+    animation:
+      speed: "normal"
+      sprite: "cheerful.gif"
+
+  - id: "idle_generic_01"
+    text: "三分钟没动了，是在发呆吗？"
+    conditions:
+      time_start: "default"
+      time_end: "default"
+      probability: 1.0
+      cooldown_minutes: 10
+    animation:
+      speed: "normal"
+      sprite: "idle.gif"
+

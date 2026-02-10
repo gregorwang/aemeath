@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.tmpdist/
+.tmpbuild/
+.tmpmakespec*/
+.cache/
+*.spec.bak
+
+# Virtual environments
+.venv/
+build_env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Project specific
+characters/*/voice_cache/
+*.log

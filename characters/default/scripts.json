@@ -1,0 +1,50 @@
+{
+  "$schema": "scripts_schema.json",
+  "version": "1.0.0",
+  "idle_events": [
+    {
+      "id": "late_night_01",
+      "time_range": "22:00-06:00",
+      "text": "这么晚了还不睡，头发会掉光的哦。",
+      "audio_cache": null,
+      "anim_speed": "slow",
+      "probability": 0.8,
+      "cooldown_minutes": 30,
+      "tags": ["health", "night"]
+    },
+    {
+      "id": "idle_normal_01",
+      "time_range": "default",
+      "text": "三分钟没动了，是在发呆吗？",
+      "audio_cache": null,
+      "anim_speed": "normal",
+      "probability": 1.0,
+      "cooldown_minutes": 10,
+      "tags": ["idle", "general"]
+    },
+    {
+      "id": "lunch_break_01",
+      "time_range": "12:00-13:00",
+      "text": "不去吃饭的话，下午代码质量会下降 30% 哦。",
+      "audio_cache": null,
+      "anim_speed": "normal",
+      "probability": 0.6,
+      "cooldown_minutes": 60,
+      "tags": ["health", "lunch"]
+    }
+  ],
+  "panic_events": [
+    {
+      "id": "panic_default",
+      "text": "哇！被发现了！",
+      "audio_cache": null,
+      "probability": 0.5
+    },
+    {
+      "id": "panic_shy",
+      "text": "才...才没有在偷看你...",
+      "audio_cache": null,
+      "probability": 0.5
+    }
+  ]
+}

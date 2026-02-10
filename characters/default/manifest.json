@@ -1,0 +1,13 @@
+{
+  "id": "default",
+  "name": "Default Companion",
+  "version": "1.0.0",
+  "author": "Cyber-Companion",
+  "description": "Built-in companion profile",
+  "ascii_width": 60,
+  "default_voice": "zh-CN-XiaoxiaoNeural",
+  "preview_image": "assets/sprites/idle.png",
+  "tags": ["default", "assistant"],
+  "min_app_version": "1.0.0"
+}
+

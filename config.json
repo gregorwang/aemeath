@@ -1,0 +1,39 @@
+{
+  "version": "1.0.0",
+  "trigger": {
+    "idle_threshold_seconds": 180,
+    "jitter_range_seconds": [-30, 60],
+    "auto_dismiss_seconds": 30
+  },
+  "appearance": {
+    "theme": "default",
+    "position": "right",
+    "ascii_width": 60,
+    "font_size_px": 8
+  },
+  "audio": {
+    "tts_voice": "zh-CN-XiaoxiaoNeural",
+    "tts_rate": "+0%",
+    "volume": 0.8,
+    "cache_enabled": true
+  },
+  "behavior": {
+    "full_screen_pause": true,
+    "auto_start_on_login": false,
+    "debug_mode": false
+  },
+  "vision": {
+    "camera_enabled": false,
+    "camera_consent_granted": false,
+    "camera_index": 0,
+    "target_fps": 15,
+    "eye_tracking_enabled": true
+  },
+  "llm": {
+    "provider": "none",
+    "model": "gpt-4o-mini",
+    "base_url": "https://api.openai.com/v1",
+    "ollama_base_url": "http://localhost:11434"
+  }
+}
+
