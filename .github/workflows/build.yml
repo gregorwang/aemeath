@@ -2,12 +2,20 @@ name: Build and Release
 
 on:
   push:
-    tags:
-      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 50
 
     steps:
       - name: Checkout
@@ -18,43 +26,96 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: requirements-build.txt
 
-      - name: Create Build Environment
+      - name: Recreate build_env
         shell: powershell
         run: |
+          if (Test-Path build_env) {
+            Remove-Item -Recurse -Force build_env
+          }
           python -m venv build_env
-          .\build_env\Scripts\Activate.ps1
-          python -m pip install --upgrade pip
+          .\build_env\Scripts\python -m pip install --upgrade pip
 
-      - name: Install Dependencies
+      - name: Install build dependencies
         shell: powershell
         run: |
-          .\build_env\Scripts\Activate.ps1
-          pip install -r requirements-build.txt
-          pip install pyinstaller>=6.0.0
+          .\build_env\Scripts\python -m pip install -r requirements-build.txt
+          .\build_env\Scripts\python -m pip install "pyinstaller>=6.0.0"
 
-      - name: Run Tests
+      - name: Verify critical runtime modules
         shell: powershell
         run: |
-          .\build_env\Scripts\Activate.ps1
-          pytest tests/ -v --tb=short
+          .\build_env\Scripts\python -c "import importlib.util as u; print('pycaw', bool(u.find_spec('pycaw'))); print('comtypes', bool(u.find_spec('comtypes'))); print('PySide6', bool(u.find_spec('PySide6')))"
 
-      - name: Build with PyInstaller
+      - name: Run tests
         shell: powershell
         run: |
-          .\build_env\Scripts\Activate.ps1
-          pyinstaller build.spec
+          .\build_env\Scripts\python -m pytest tests/ -v --tb=short
 
-      - name: Create Archive
+      - name: Build EXE via build.spec
         shell: powershell
         run: |
-          $version = "${{ github.ref_name }}"
-          Compress-Archive -Path "dist\CyberCompanion\*" -DestinationPath "CyberCompanion_$version.zip"
+          .\build_env\Scripts\python -m PyInstaller --clean --noconfirm build.spec
 
-      - name: Create Release
+      - name: Smoke check executable and logs
+        shell: powershell
+        run: |
+          $exePath = "dist\CyberCompanion\CyberCompanion-core.exe"
+          if (-not (Test-Path $exePath)) {
+            throw "Executable not found: $exePath"
+          }
+
+          $logDir = Join-Path $env:LOCALAPPDATA "CyberCompanion\logs"
+          $logFile = Join-Path $logDir "app.log"
+          if (Test-Path $logFile) {
+            Remove-Item $logFile -Force
+          }
+
+          $proc = Start-Process -FilePath $exePath -PassThru
+          Start-Sleep -Seconds 15
+          if (-not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force
+            Start-Sleep -Seconds 1
+          }
+
+          if (-not (Test-Path $logFile)) {
+            throw "Smoke-check failed: app.log not found at $logFile"
+          }
+
+          $logText = Get-Content -Path $logFile -Raw
+          if ($logText -notmatch "Application starting") {
+            throw "Smoke-check failed: startup marker not found in app.log"
+          }
+          if ($logText -match "(ModuleNotFoundError|ImportError|Traceback \(most recent call last\)|Fatal Python error|CRITICAL)") {
+            throw "Smoke-check failed: fatal import/runtime error detected in app.log"
+          }
+          if ($logText -notmatch "(AudioDetector\].*音频检测已启动|AudioOutputMonitor\].*音频输出监控已启动|AudioDetector\].*依赖缺失|AudioDetector\].*初始化默认输出设备失败|AudioOutputMonitor\].*依赖缺失)") {
+            throw "Smoke-check failed: expected audio monitor startup/degradation log not found"
+          }
+
+      - name: Create archive
+        shell: powershell
+        run: |
+          $safeRef = "${{ github.ref_name }}" -replace "[\\/:\*\?""<>\|]", "-"
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $artifactName = "CyberCompanion_${safeRef}_${shortSha}"
+          Compress-Archive -Path "dist\CyberCompanion\*" -DestinationPath "$artifactName.zip" -Force
+          "ARTIFACT_NAME=$artifactName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: CyberCompanion_*.zip
+          files: ${{ env.ARTIFACT_NAME }}.zip
           draft: false
           prerelease: false
           generate_release_notes: true
