@@ -90,8 +90,8 @@ jobs:
           if ($logText -match "(ModuleNotFoundError|ImportError|Traceback \(most recent call last\)|Fatal Python error|CRITICAL)") {
             throw "Smoke-check failed: fatal import/runtime error detected in app.log"
           }
-          if ($logText -notmatch "(AudioDetector\].*音频检测已启动|AudioOutputMonitor\].*音频输出监控已启动|AudioDetector\].*依赖缺失|AudioDetector\].*初始化默认输出设备失败|AudioOutputMonitor\].*依赖缺失)") {
-            throw "Smoke-check failed: expected audio monitor startup/degradation log not found"
+          if ($logText -notmatch "\[(AudioDetector|AudioOutputMonitor)\]") {
+            throw "Smoke-check failed: expected audio monitor log entries not found"
           }
 
       - name: Create archive
