@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -39,6 +40,20 @@ class PathsLoggerTest(unittest.TestCase):
             for handler in list(logger.handlers):
                 handler.close()
                 logger.removeHandler(handler)
+
+    def test_windows_user_data_dir_is_stable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            local_appdata = Path(tmp)
+            qt_path = str(local_appdata / "SomeQtDerivedPath")
+            with patch("core.paths.sys.platform", "win32"), patch.dict(
+                "core.paths.os.environ",
+                {"LOCALAPPDATA": str(local_appdata)},
+                clear=False,
+            ), patch("core.paths.QStandardPaths.writableLocation", return_value=qt_path):
+                user_dir = get_user_data_dir()
+
+            self.assertEqual(user_dir, local_appdata / "CyberCompanion")
+            self.assertTrue(user_dir.exists())
 
 
 if __name__ == "__main__":

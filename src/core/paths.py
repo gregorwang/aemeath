@@ -33,14 +33,16 @@ def get_user_data_dir() -> Path:
     """
     Return writable user data directory.
     """
-    # Prefer Qt-standard writable location for consistency with runtime platform rules.
-    location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-    if location:
-        target = Path(location)
-    elif sys.platform == "win32":
+    # Keep a deterministic Windows location so packaged/runtime checks can rely on one path.
+    if sys.platform == "win32":
         target = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP_NAME
     else:
-        target = Path.home() / ".local" / "share" / APP_NAME
+        # Prefer Qt-standard writable location for non-Windows platforms.
+        location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+        if location:
+            target = Path(location)
+        else:
+            target = Path.home() / ".local" / "share" / APP_NAME
 
     # Some environments may return app-agnostic location when app metadata is absent.
     if target.name.lower() != APP_NAME.lower():

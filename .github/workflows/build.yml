@@ -66,22 +66,44 @@ jobs:
             throw "Executable not found: $exePath"
           }
 
-          $logDir = Join-Path $env:LOCALAPPDATA "CyberCompanion\logs"
-          $logFile = Join-Path $logDir "app.log"
-          if (Test-Path $logFile) {
-            Remove-Item $logFile -Force
+          $candidateLogs = @(
+            (Join-Path $env:LOCALAPPDATA "CyberCompanion\logs\app.log"),
+            (Join-Path $env:LOCALAPPDATA "CyberCompanion-core\logs\app.log"),
+            (Join-Path $env:LOCALAPPDATA "CyberCompanion-core\CyberCompanion\logs\app.log")
+          )
+          foreach ($candidate in $candidateLogs) {
+            if (Test-Path $candidate) {
+              Remove-Item $candidate -Force
+            }
           }
 
           $proc = Start-Process -FilePath $exePath -PassThru
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 20
           if (-not $proc.HasExited) {
             Stop-Process -Id $proc.Id -Force
             Start-Sleep -Seconds 1
           }
 
-          if (-not (Test-Path $logFile)) {
-            throw "Smoke-check failed: app.log not found at $logFile"
+          $exitCode = $null
+          try {
+            $exitCode = $proc.ExitCode
+          } catch {
+            $exitCode = $null
           }
+
+          $probeRoots = Get-ChildItem -Path $env:LOCALAPPDATA -Directory -Filter "*CyberCompanion*" -ErrorAction SilentlyContinue
+          foreach ($root in $probeRoots) {
+            $candidateLogs += (Join-Path $root.FullName "logs\app.log")
+            $candidateLogs += (Join-Path $root.FullName "CyberCompanion\logs\app.log")
+          }
+
+          $existingLogs = $candidateLogs | Select-Object -Unique | Where-Object { Test-Path $_ }
+          if (-not $existingLogs) {
+            $searched = ($candidateLogs | Select-Object -Unique) -join "; "
+            throw "Smoke-check failed: app.log not found. exitCode=$exitCode searched=$searched"
+          }
+          $logFile = $existingLogs | Sort-Object { (Get-Item $_).LastWriteTimeUtc } -Descending | Select-Object -First 1
+          Write-Host "Smoke-check using log file: $logFile"
 
           $logText = Get-Content -Path $logFile -Raw
           if ($logText -notmatch "Application starting") {
