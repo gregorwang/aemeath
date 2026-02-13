@@ -17,6 +17,7 @@ class ScriptEngineTest(unittest.TestCase):
     def setUp(self) -> None:
         self.idle_scripts = [
             Script(id="night", text="night", time_range="22:00-06:00", probability=1.0, cooldown_minutes=30),
+            Script(id="lunch", text="lunch", time_range="12:00-13:00", probability=1.0, cooldown_minutes=0),
             Script(id="default", text="default", time_range="default", probability=1.0, cooldown_minutes=0),
         ]
         self.panic_scripts = [
@@ -42,7 +43,15 @@ class ScriptEngineTest(unittest.TestCase):
         self.assertIsNotNone(script)
         self.assertEqual(script.id, "panic")
 
+    def test_time_match_end_boundary_exclusive(self) -> None:
+        at_start = self.engine.select_idle_script(now=datetime(2026, 2, 10, 12, 0))
+        self.assertIsNotNone(at_start)
+        self.assertEqual(at_start.id, "lunch")
+
+        at_end = self.engine.select_idle_script(now=datetime(2026, 2, 10, 13, 0))
+        self.assertIsNotNone(at_end)
+        self.assertEqual(at_end.id, "default")
+
 
 if __name__ == "__main__":
     unittest.main()
-

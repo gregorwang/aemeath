@@ -14,13 +14,13 @@
 |------|------|
 | **存在方式** | 生活在屏幕边缘的数字生命，不是传统"程序窗口" |
 | **触发机制** | 用户离席（Idle）时自动出现，用户回归时自动隐藏 |
-| **表现形式** | 视觉（彩色 ASCII 动画）+ 听觉（TTS 语音合成） |
+| **表现形式** | 视觉（GIF 动画 / 彩色 ASCII 双模式）+ 听觉（TTS 语音合成） |
 | **平台** | Windows 10/11，支持高 DPI 显示 |
 | **潜行能力** | 平时完全不可见，不在任务栏显示，不干扰用户操作 |
 
 ### 用户体验场景
 
-1. 用户离开电脑 3 分钟 → 一个彩色 ASCII 角色从屏幕边缘探出头
+1. 用户离开电脑 3 分钟 → 一个 GIF 动画角色从屏幕边缘探出头（若 GIF 不可用则 fallback 到彩色 ASCII）
 2. 角色说一句符合当前时段的台词（如深夜："还不睡吗？"）
 3. 用户回来触摸鼠标/键盘 → 角色做出惊吓表情并迅速缩回屏幕外
 4. 角色消失，系统恢复完全隐形状态
@@ -69,8 +69,11 @@ Python >= 3.10, < 3.13
 │                    层级 C: 表现层 (The Body)                  │
 │   ┌─────────────────┐    ┌──────────────────────────┐       │
 │   │  AsciiRenderer  │    │    EntityWindow (QWidget) │       │
-│   │  (视觉引擎)      │    │    (透明无边框窗口)         │       │
-│   └────────┬────────┘    └────────────┬─────────────┘       │
+│   │  (ASCII fallback│    │    (透明无边框窗口)         │       │
+│   │  + 视线追踪引擎) │    │  QStackedLayout 双模式:    │       │
+│   └────────┬────────┘    │  ├─ GIF Sprite (QMovie)   │       │
+│            │             │  └─ ASCII HTML  (QLabel)   │       │
+│            │             └────────────┬─────────────┘       │
 │            │                         │                      │
 ├────────────┼─────────────────────────┼──────────────────────┤
 │            │    层级 B: 决策层 (The Brain)                    │
@@ -365,6 +368,7 @@ class Script:
     audio_path: Optional[str]  # 预生成的音频文件路径（可选）
     anim_speed: str            # 动画速度: "slow", "normal", "fast"
     priority: int              # 优先级: 1=高, 2=中, 3=低
+    sprite_path: Optional[str] # GIF/图片 Sprite 路径（可选，优先于 ASCII 渲染）
 
 
 class AssetManager:
@@ -534,9 +538,19 @@ class EntityWindow(QWidget):
     - 不显示任务栏图标 (Tool)
     
     职责：
-    - 显示 ASCII 字符画（通过 QLabel + HTML）
+    - 显示角色视觉内容（GIF Sprite 或 ASCII 字符画，双模式切换）
     - 执行滑入/滑出动画
     - 管理动画队列
+    
+    显示模式 (通过 QStackedLayout 实现):
+    - GIF/Sprite 模式 (优先): 通过 set_sprite_content(path) 加载 GIF 动画
+      └─ 使用 QMovie 播放 GIF 帧动画，支持 CacheAll 模式
+    - ASCII 模式 (fallback): 通过 set_ascii_content(html) 加载 HTML ASCII 字符画
+      └─ 使用 QLabel + RichText 渲染，支持视线追踪眼球占位符替换
+    
+    Director 根据 Script.sprite_path 自动选择模式:
+    - sprite_path 存在且有效 → GIF 模式
+    - sprite_path 为空或加载失败 → ASCII fallback
     """
     
     def __init__(self, parent=None):
@@ -568,9 +582,15 @@ class EntityWindow(QWidget):
         """
         初始化 UI 组件
         
-        核心组件:
-        - QLabel: 显示 HTML 格式的 ASCII 字符画
+        核心组件 (使用 QStackedLayout 实现双模式切换):
+        - _label (QLabel): 显示 HTML 格式的 ASCII 字符画 (fallback 模式)
+        - _sprite_label (QLabel): 显示 GIF 动画 (通过 QMovie) 或静态图片 (QPixmap)
         - 字体: 必须使用等宽字体 (Consolas/Courier New)
+        
+        双模式切换逻辑:
+        - set_sprite_content(path): 切换到 _sprite_label, 使用 QMovie 播放 GIF
+        - set_ascii_content(html): 切换到 _label, 显示 HTML ASCII
+        - QStackedLayout 确保同一时刻只显示一种模式
         """
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -579,7 +599,15 @@ class EntityWindow(QWidget):
         self._label.setTextFormat(Qt.TextFormat.RichText)
         self._label.setFont(QFont("Consolas", 8))
         self._label.setStyleSheet("background: transparent;")
-        layout.addWidget(self._label)
+        
+        self._sprite_label = QLabel()
+        self._sprite_label.setStyleSheet("background: transparent;")
+        self._sprite_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self._content_stack = QStackedLayout()
+        self._content_stack.addWidget(self._label)
+        self._content_stack.addWidget(self._sprite_label)
+        layout.addLayout(self._content_stack)
     
     def _setup_animations(self) -> None:
         """
@@ -621,13 +649,30 @@ class EntityWindow(QWidget):
     
     def set_ascii_content(self, html: str) -> None:
         """
-        更新显示内容
+        更新 ASCII 模式显示内容 (切换到 _label)
         
         参数:
             html: AsciiRenderer 生成的 HTML 字符串
         """
+        self._stop_movie()      # 停止正在播放的 GIF
+        self._content_stack.setCurrentWidget(self._label)
         self._label.setText(html)
+        self._label.adjustSize()
         self.adjustSize()
+    
+    def set_sprite_content(self, sprite_path: Path | str) -> None:
+        """
+        加载并显示 GIF 动画或静态图片 (切换到 _sprite_label)
+        
+        参数:
+            sprite_path: GIF 或图片文件路径
+        
+        行为:
+        - .gif 后缀: 使用 QMovie 播放逐帧动画 (CacheAll 模式)
+        - 其他后缀: 使用 QPixmap 加载为静态图片
+        - 加载失败时抛出异常, 由 Director 捕获并 fallback 到 ASCII
+        """
+        ...
 ```
 
 ---

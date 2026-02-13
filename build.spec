@@ -2,18 +2,42 @@
 # Usage: pyinstaller build.spec
 
 from pathlib import Path
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+)
 
 PROJECT_ROOT = Path(SPECPATH)
+
+mp_datas = collect_data_files("mediapipe")
+mp_binaries = collect_dynamic_libs("mediapipe")
+mp_hiddenimports = [
+    "mediapipe",
+]
+cv2_datas = collect_data_files("cv2")
+cv2_binaries = collect_dynamic_libs("cv2")
+recorded_paths_dir = PROJECT_ROOT / "recorded_paths"
+recorded_paths_datas = (
+    [(str(recorded_paths_dir), "recorded_paths")]
+    if recorded_paths_dir.exists()
+    else []
+)
 
 a = Analysis(
     [str(PROJECT_ROOT / "src" / "main.py")],
     pathex=[str(PROJECT_ROOT / "src")],
-    binaries=[],
+    binaries=[
+        *mp_binaries,
+        *cv2_binaries,
+    ],
     datas=[
         (str(PROJECT_ROOT / "characters"), "characters"),
         (str(PROJECT_ROOT / "assets"), "assets"),
+        *recorded_paths_datas,
         (str(PROJECT_ROOT / "config.json"), "."),
         (str(PROJECT_ROOT / "version.json"), "."),
+        *mp_datas,
+        *cv2_datas,
     ],
     hiddenimports=[
         "PySide6.QtMultimedia",
@@ -22,21 +46,31 @@ a = Analysis(
         "aiohttp",
         "cv2",
         "mediapipe",
-        "paddle",
-        "mss",
-        "paddleocr",
+        "matplotlib",
         "openai",
         "httpx",
+        "websocket",
+        "speech_recognition",
+        "pyaudio",
+        "rapidfuzz",
+        "pycaw",
+        "pycaw.pycaw",
+        "comtypes",
+        "comtypes.client",
+        "comtypes.stream",
         "json",
         "yaml",
         "hashlib",
+        "unittest",
+        "unittest.mock",
+        *mp_hiddenimports,
     ],
     excludes=[
         "tkinter",
         "_tkinter",
         "tk",
-        "matplotlib",
-        "scipy",
+        "paddle",
+        "paddleocr",
         "pandas",
         "sklearn",
         "scikit-learn",
@@ -46,7 +80,6 @@ a = Analysis(
         "ipykernel",
         "ipywidgets",
         "pytest",
-        "unittest",
         "doctest",
         "lib2to3",
         "pydoc_data",

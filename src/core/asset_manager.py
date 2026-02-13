@@ -7,6 +7,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QFile, QResource
+
+from .time_range import matches_time_range
+
 try:
     import yaml
 except ModuleNotFoundError:
@@ -267,6 +271,11 @@ class AssetManager:
         text = str(path_value).strip()
         if not text:
             return None
+        if text.startswith(":/"):
+            # Qt resource path
+            if QFile.exists(text) or QResource(text).isValid():
+                return text
+            return None
         path = Path(text)
         if not path.is_absolute():
             path = self._character_dir / path
@@ -377,28 +386,4 @@ class AssetManager:
 
     @staticmethod
     def _match_time_range(time_range: str, now: datetime) -> bool:
-        value = (time_range or "default").strip().lower()
-        if value == "default":
-            return True
-        if "-" not in value:
-            return False
-        start_text, end_text = value.split("-", 1)
-        try:
-            start_m = AssetManager._to_minutes(start_text)
-            end_m = AssetManager._to_minutes(end_text)
-        except ValueError:
-            return False
-
-        now_m = now.hour * 60 + now.minute
-        if start_m <= end_m:
-            return start_m <= now_m < end_m
-        return now_m >= start_m or now_m < end_m
-
-    @staticmethod
-    def _to_minutes(value: str) -> int:
-        hh_str, mm_str = value.strip().split(":")
-        hh = int(hh_str)
-        mm = int(mm_str)
-        if not (0 <= hh < 24 and 0 <= mm < 60):
-            raise ValueError("Invalid HH:MM range")
-        return hh * 60 + mm
+        return matches_time_range(time_range, now)

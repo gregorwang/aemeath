@@ -4,6 +4,8 @@ import os
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QStandardPaths
+
 
 APP_NAME = "CyberCompanion"
 
@@ -31,17 +33,32 @@ def get_user_data_dir() -> Path:
     """
     Return writable user data directory.
     """
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    # Prefer Qt-standard writable location for consistency with runtime platform rules.
+    location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+    if location:
+        target = Path(location)
+    elif sys.platform == "win32":
+        target = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP_NAME
     else:
-        base = Path.home() / ".local" / "share"
-    target = base / APP_NAME
+        target = Path.home() / ".local" / "share" / APP_NAME
+
+    # Some environments may return app-agnostic location when app metadata is absent.
+    if target.name.lower() != APP_NAME.lower():
+        target = target / APP_NAME
+
     target.mkdir(parents=True, exist_ok=True)
     return target
 
 
 def get_cache_dir() -> Path:
-    target = get_user_data_dir() / "cache" / "audio"
+    location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)
+    if location:
+        base = Path(location)
+        if base.name.lower() != APP_NAME.lower():
+            base = base / APP_NAME
+        target = base / "audio"
+    else:
+        target = get_user_data_dir() / "cache" / "audio"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -52,14 +69,32 @@ def get_log_dir() -> Path:
     return target
 
 
+def get_log_file() -> Path:
+    return get_log_dir() / "app.log"
+
+
 def resolve_config_path() -> Path:
     """
-    Resolve config path from packaged or development layout.
+    Resolve writable config path.
+
+    Priority:
+    1) User data config path (`%LOCALAPPDATA%/CyberCompanion/config.json`)
+    2) First-run bootstrap copy from bundled config (if present)
+    3) Return user data path (even if not created yet)
     """
+    user_cfg = get_user_data_dir() / "config.json"
+    if user_cfg.exists():
+        return user_cfg
+
     base = get_base_dir()
     root_cfg = base / "config.json"
     folder_cfg = base / "config" / "config.json"
-    if root_cfg.exists():
-        return root_cfg
-    return folder_cfg
+    source_cfg = root_cfg if root_cfg.exists() else folder_cfg if folder_cfg.exists() else None
 
+    if source_cfg is not None:
+        try:
+            user_cfg.write_text(source_cfg.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            pass
+
+    return user_cfg

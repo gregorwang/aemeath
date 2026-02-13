@@ -1,7 +1,6 @@
 import ctypes
 import ctypes.wintypes
 import os
-import queue
 import subprocess
 import sys
 import threading
@@ -11,7 +10,7 @@ os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
 os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QTimer, Signal
 
 try:
     from ai.gaze_tracker import GazeTracker
@@ -251,9 +250,14 @@ def main() -> int:
 
     tray_manager: SystemTrayManager | None = None
     voice_listener: VoiceWakeupListener | None = None
-    hotkey_events: queue.SimpleQueue[tuple[str, str]] = queue.SimpleQueue()
     _ptt_busy = False
     _ptt_lock = threading.Lock()
+
+    class _PushToTalkBridge(QObject):
+        result = Signal(str)
+        error = Signal(str)
+
+    ptt_bridge = _PushToTalkBridge()
 
     def _notify(title: str, message: str, timeout_ms: int = 3000) -> None:
         if tray_manager is not None:
@@ -341,14 +345,30 @@ def main() -> int:
                     listen_timeout_seconds=6.0,
                     phrase_time_limit_seconds=12.0,
                 )
-                hotkey_events.put(("ptt_result", text))
+                ptt_bridge.result.emit(text)
             except Exception as exc:
-                hotkey_events.put(("ptt_error", str(exc)))
+                ptt_bridge.error.emit(str(exc))
             finally:
                 with _ptt_lock:
                     _ptt_busy = False
 
         threading.Thread(target=_worker, daemon=True, name="PushToTalk").start()
+
+    def _on_ptt_result(payload: str) -> None:
+        text = (payload or "").strip()
+        if not text:
+            _notify("语音转写", "未识别到有效语音，请重试。", timeout_ms=2200)
+            return
+        logger.info("[PushToTalk] transcript=%s", text)
+        _notify("语音转写", text, timeout_ms=1800)
+        if not _execute_voice_command(text, source="push_to_talk"):
+            _notify("语音命令", f"未匹配到动作：{text}", timeout_ms=2600)
+
+    def _on_ptt_error(message: str) -> None:
+        _notify("语音转写失败", message, timeout_ms=3500)
+
+    ptt_bridge.result.connect(_on_ptt_result)
+    ptt_bridge.error.connect(_on_ptt_error)
 
     def _open_logs_location() -> None:
         target = log_file.parent
@@ -578,76 +598,77 @@ def main() -> int:
     MOD_NONE = 0x0000
     VK_S = 0x53
     VK_B = 0x42
-    _hotkey_registered = False
+    _hotkey_registered_ids: list[int] = []
+    _hotkey_filter: QAbstractNativeEventFilter | None = None
 
-    def _drain_hotkey_events() -> None:
-        while True:
+    def _unregister_hotkeys() -> None:
+        nonlocal _hotkey_filter
+        if sys.platform != "win32":
+            return
+        if _hotkey_filter is not None:
             try:
-                event, payload = hotkey_events.get_nowait()
-            except queue.Empty:
-                return
-
-            if event == "summon_hotkey":
-                director.summon_now()
-                continue
-            if event == "ptt_hotkey":
-                _start_push_to_talk_once()
-                continue
-            if event == "ptt_result":
-                text = (payload or "").strip()
-                if not text:
-                    _notify("语音转写", "未识别到有效语音，请重试。", timeout_ms=2200)
-                    continue
-                logger.info("[PushToTalk] transcript=%s", text)
-                _notify("语音转写", text, timeout_ms=1800)
-                if not _execute_voice_command(text, source="push_to_talk"):
-                    _notify("语音命令", f"未匹配到动作：{text}", timeout_ms=2600)
-                continue
-            if event == "ptt_error":
-                _notify("语音转写失败", payload, timeout_ms=3500)
-
-    hotkey_dispatch_timer = QTimer()
-    hotkey_dispatch_timer.setInterval(90)
-    hotkey_dispatch_timer.timeout.connect(_drain_hotkey_events)
-    hotkey_dispatch_timer.start()
-
-    def _hotkey_listener() -> None:
-        nonlocal _hotkey_registered
-        registered_ids: list[int] = []
+                app.removeNativeEventFilter(_hotkey_filter)
+            except Exception:
+                pass
+            _hotkey_filter = None
+        if not _hotkey_registered_ids:
+            return
         try:
             user32 = ctypes.windll.user32
-            if not user32.RegisterHotKey(None, HOTKEY_ID_SUMMON, MOD_CTRL_SHIFT, VK_S):
-                logger.warning("[Hotkey] Failed to register Ctrl+Shift+S (may be in use by another app)")
-                return
-            registered_ids.append(HOTKEY_ID_SUMMON)
-            if not user32.RegisterHotKey(None, HOTKEY_ID_PUSH_TO_TALK, MOD_NONE, VK_B):
-                logger.warning("[Hotkey] Failed to register B for push-to-talk (may be in use by another app)")
-            else:
-                registered_ids.append(HOTKEY_ID_PUSH_TO_TALK)
-            _hotkey_registered = True
-            logger.info("[Hotkey] ✅ 全局快捷键已注册: Ctrl+Shift+S 召唤, B 单次语音转写")
-            msg = ctypes.wintypes.MSG()
-            while ctypes.windll.user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
-                if msg.message != 0x0312:  # WM_HOTKEY
-                    continue
-                if msg.wParam == HOTKEY_ID_SUMMON:
-                    logger.info("[Hotkey] Ctrl+Shift+S pressed")
-                    hotkey_events.put(("summon_hotkey", ""))
-                elif msg.wParam == HOTKEY_ID_PUSH_TO_TALK:
-                    logger.info("[Hotkey] B pressed")
-                    hotkey_events.put(("ptt_hotkey", ""))
-        except Exception as exc:
-            logger.error("[Hotkey] Hotkey listener error: %s", exc)
+            for hotkey_id in list(_hotkey_registered_ids):
+                try:
+                    user32.UnregisterHotKey(None, hotkey_id)
+                except Exception:
+                    pass
         finally:
-            if _hotkey_registered:
-                for hotkey_id in registered_ids:
-                    try:
-                        ctypes.windll.user32.UnregisterHotKey(None, hotkey_id)
-                    except Exception:
-                        pass
+            _hotkey_registered_ids.clear()
 
-    hotkey_thread = threading.Thread(target=_hotkey_listener, daemon=True, name="HotkeyListener")
-    hotkey_thread.start()
+    if sys.platform == "win32":
+        class _WindowsHotkeyFilter(QAbstractNativeEventFilter):
+            WM_HOTKEY = 0x0312
+
+            def nativeEventFilter(self, event_type, message):
+                try:
+                    if event_type not in ("windows_generic_MSG", "windows_dispatcher_MSG"):
+                        return False, 0
+                    msg = ctypes.wintypes.MSG.from_address(int(message))
+                    if int(msg.message) != self.WM_HOTKEY:
+                        return False, 0
+                    hotkey_id = int(msg.wParam)
+                    if hotkey_id == HOTKEY_ID_SUMMON:
+                        logger.info("[Hotkey] Ctrl+Shift+S pressed")
+                        QTimer.singleShot(0, director.summon_now)
+                        return True, 0
+                    if hotkey_id == HOTKEY_ID_PUSH_TO_TALK:
+                        logger.info("[Hotkey] B pressed")
+                        QTimer.singleShot(0, _start_push_to_talk_once)
+                        return True, 0
+                except Exception as exc:
+                    logger.debug("[Hotkey] nativeEventFilter error: %s", exc)
+                return False, 0
+
+        _hotkey_filter = _WindowsHotkeyFilter()
+        app.installNativeEventFilter(_hotkey_filter)
+
+        try:
+            user32 = ctypes.windll.user32
+            if user32.RegisterHotKey(None, HOTKEY_ID_SUMMON, MOD_CTRL_SHIFT, VK_S):
+                _hotkey_registered_ids.append(HOTKEY_ID_SUMMON)
+            else:
+                logger.warning("[Hotkey] Failed to register Ctrl+Shift+S (may be in use by another app)")
+            if user32.RegisterHotKey(None, HOTKEY_ID_PUSH_TO_TALK, MOD_NONE, VK_B):
+                _hotkey_registered_ids.append(HOTKEY_ID_PUSH_TO_TALK)
+            else:
+                logger.warning("[Hotkey] Failed to register B for push-to-talk (may be in use by another app)")
+            if _hotkey_registered_ids:
+                logger.info("[Hotkey] ✅ 全局快捷键已注册: ids=%s", _hotkey_registered_ids)
+            else:
+                logger.warning("[Hotkey] 未成功注册任何全局快捷键")
+        except Exception as exc:
+            logger.error("[Hotkey] Failed to initialize native hotkey filter: %s", exc)
+            _unregister_hotkeys()
+    else:
+        logger.info("[Hotkey] Global hotkeys are only enabled on Windows")
 
     # --- Startup notification about voice wakeup + hotkey ---
     _startup_parts: list[str] = []
@@ -666,7 +687,15 @@ def main() -> int:
         if not config.audio.microphone_enabled:
             reasons.append("麦克风未启用")
         _startup_parts.append(f"语音唤醒: 关 ({'; '.join(reasons)})")
-    _startup_parts.append("快捷键: Ctrl+Shift+S 召唤伴侣；B 单次语音转写")
+    registered_shortcuts: list[str] = []
+    if HOTKEY_ID_SUMMON in _hotkey_registered_ids:
+        registered_shortcuts.append("Ctrl+Shift+S 召唤伴侣")
+    if HOTKEY_ID_PUSH_TO_TALK in _hotkey_registered_ids:
+        registered_shortcuts.append("B 单次语音转写")
+    if registered_shortcuts:
+        _startup_parts.append(f"快捷键: {'；'.join(registered_shortcuts)}")
+    else:
+        _startup_parts.append("快捷键: 未注册（可能被其他程序占用）")
     if config.behavior.debug_mode:
         _startup_parts.append("调试模式: 开 (转写结果将以通知显示)")
         _startup_parts.append(f"日志文件: {log_file}")
@@ -680,6 +709,7 @@ def main() -> int:
 
     def _shutdown() -> None:
         logger.info("Application shutting down.")
+        _unregister_hotkeys()
         director.shutdown()
         idle_monitor.stop()
         _stop_voice_listener()

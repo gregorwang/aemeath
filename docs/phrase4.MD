@@ -247,6 +247,8 @@ class GazeTracker(QThread):
 
 #### 动态眼睛渲染
 
+> ⚠️ **GIF 模式适用性说明**: 视线追踪通过 ASCII 字符画中的占位符 `{EYE_L}` / `{EYE_R}` 实现眼球移动。当角色使用 GIF Sprite 显示时（即 `Script.sprite_path` 有效），视线追踪**不生效**，因为 GIF 不支持字符级别的动态替换。此时 `Director._current_ascii_template` 为空字符串，`_on_gaze_updated` 方法会跳过渲染更新。这是**预期的设计行为**，不是 bug。
+
 ```python
 # src/ui/ascii_renderer.py 新增方法
 

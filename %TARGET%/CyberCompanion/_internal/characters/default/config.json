@@ -1,0 +1,15 @@
+{
+  "appearance": {
+    "ascii_width": 60,
+    "font_size_px": 8
+  },
+  "audio": {
+    "tts_voice": "zh-CN-XiaoxiaoNeural",
+    "tts_rate": "+0%",
+    "volume": 0.8
+  },
+  "behavior": {
+    "default_edge": "right"
+  }
+}
+

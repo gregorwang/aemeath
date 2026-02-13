@@ -31,7 +31,7 @@ jobs:
         run: |
           .\build_env\Scripts\Activate.ps1
           pip install -r requirements-build.txt
-          pip install pyinstaller>=6.0.0 pytest
+          pip install pyinstaller>=6.0.0
 
       - name: Run Tests
         shell: powershell
@@ -60,4 +60,3 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

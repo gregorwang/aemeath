@@ -8,9 +8,14 @@ PyYAML>=6.0,<7.0
 
 # Phase 4 dependencies (enabled)
 mediapipe>=0.10.0,<1.0.0
+matplotlib>=3.8.0,<4.0.0
 opencv-python-headless>=4.9.0,<5.0.0
-mss>=9.0.1,<10.0.0
-paddleocr>=2.7.3,<3.0.0
-paddlepaddle>=3.3.0,<4.0.0
 httpx>=0.27.0,<1.0.0
+websocket-client>=1.8.0,<2.0.0
 openai>=1.12.0,<2.0.0
+SpeechRecognition>=3.10.0,<4.0.0
+PyAudio>=0.2.14,<0.3.0
+rapidfuzz>=3.9.0,<4.0.0
+pycaw>=20230407
+comtypes>=1.2.0
+pytest>=8.0.0,<10.0.0

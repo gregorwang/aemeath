@@ -3,14 +3,55 @@ from __future__ import annotations
 import logging
 
 try:
-    from PyQt6.QtCore import QObject, QTimer, pyqtSignal as Signal  # type: ignore[attr-defined]
+    from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover
     try:
-        from PyQt5.QtCore import QObject, QTimer, pyqtSignal as Signal  # type: ignore[attr-defined]
+        from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot  # type: ignore[attr-defined]
     except ImportError:
-        from PySide6.QtCore import QObject, QTimer, Signal
+        from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
 logger = logging.getLogger("CyberCompanion")
+
+
+class _AudioPeakWorker(QObject):
+    """Background COM meter polling worker."""
+
+    peak_sampled = Signal(float)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._meter = None
+
+    def _init_default_output_meter(self) -> bool:
+        try:
+            import comtypes  # noqa: F401
+            from comtypes import CLSCTX_ALL
+            from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
+
+            speakers = AudioUtilities.GetSpeakers()
+            interface = speakers.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
+            self._meter = interface.QueryInterface(IAudioMeterInformation)
+            return True
+        except Exception:
+            self._meter = None
+            return False
+
+    def _read_peak_level(self) -> float:
+        if self._meter is None and not self._init_default_output_meter():
+            return 0.0
+        try:
+            return float(self._meter.GetPeakValue() or 0.0)
+        except Exception:
+            if self._init_default_output_meter() and self._meter is not None:
+                try:
+                    return float(self._meter.GetPeakValue() or 0.0)
+                except Exception:
+                    return 0.0
+            return 0.0
+
+    @Slot()
+    def poll(self) -> None:
+        self.peak_sampled.emit(self._read_peak_level())
 
 
 class AudioDetector(QObject):
@@ -31,6 +72,8 @@ class AudioDetector(QObject):
     audio_playing_started = Signal()
     audio_playing_stopped = Signal()
     audio_state_changed = Signal(bool)
+
+    _poll_requested = Signal()
 
     DEFAULT_POLL_INTERVAL_MS = 200
     DEFAULT_THRESHOLD = 0.01
@@ -57,12 +100,17 @@ class AudioDetector(QObject):
         self._silence_counter = 0
         self._last_peak = 0.0
 
+        # Keep synchronous path for tests/manual polling compatibility.
         self._meter = None
         self._dependencies_available = self._init_default_output_meter()
 
         self._timer = QTimer(self)
         self._timer.setInterval(self._poll_interval_ms)
-        self._timer.timeout.connect(self._poll_once)
+        self._timer.timeout.connect(self._poll_async_once)
+
+        self._worker_thread: QThread | None = None
+        self._worker: _AudioPeakWorker | None = None
+        self._poll_inflight = False
 
     @property
     def is_available(self) -> bool:
@@ -85,6 +133,7 @@ class AudioDetector(QObject):
         self._running = True
         self._sound_counter = 0
         self._silence_counter = 0
+        self._poll_inflight = False
         self._timer.start()
         logger.info("[AudioDetector] 音频检测已启动 interval=%sms threshold=%.3f", self._poll_interval_ms, self._threshold)
 
@@ -93,6 +142,8 @@ class AudioDetector(QObject):
             return
         self._running = False
         self._timer.stop()
+        self._shutdown_worker()
+        self._poll_inflight = False
         self._sound_counter = 0
         self._silence_counter = 0
         self._last_peak = 0.0
@@ -107,6 +158,45 @@ class AudioDetector(QObject):
 
     def stop(self) -> None:
         self.stop_monitoring()
+
+    def __del__(self) -> None:
+        try:
+            self._shutdown_worker()
+        except Exception:
+            pass
+
+    def _ensure_worker(self) -> None:
+        if self._worker_thread is not None and self._worker is not None and self._worker_thread.isRunning():
+            return
+
+        thread = QThread(self)
+        worker = _AudioPeakWorker()
+        worker.moveToThread(thread)
+        self._poll_requested.connect(worker.poll)
+        worker.peak_sampled.connect(self._on_async_peak_sampled)
+        thread.finished.connect(worker.deleteLater)
+        thread.start()
+
+        self._worker_thread = thread
+        self._worker = worker
+
+    def _shutdown_worker(self) -> None:
+        worker = self._worker
+        thread = self._worker_thread
+        if worker is not None:
+            try:
+                self._poll_requested.disconnect(worker.poll)
+            except Exception:
+                pass
+            try:
+                worker.peak_sampled.disconnect(self._on_async_peak_sampled)
+            except Exception:
+                pass
+        self._worker = None
+        self._worker_thread = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(1000)
 
     def _init_default_output_meter(self) -> bool:
         try:
@@ -141,10 +231,34 @@ class AudioDetector(QObject):
                     return 0.0
             return 0.0
 
+    def _poll_async_once(self) -> None:
+        if not self._running:
+            return
+        if self._worker_thread is None or self._worker is None or not self._worker_thread.isRunning():
+            self._ensure_worker()
+        if self._worker_thread is None or self._worker is None or not self._worker_thread.isRunning():
+            self._poll_once()
+            return
+        if self._poll_inflight:
+            return
+        self._poll_inflight = True
+        self._poll_requested.emit()
+
+    # Kept synchronous for unit tests and compatibility.
     def _poll_once(self) -> None:
         if not self._running:
             return
         peak = self._read_peak_level()
+        self._handle_peak_sample(peak)
+
+    @Slot(float)
+    def _on_async_peak_sampled(self, peak: float) -> None:
+        self._poll_inflight = False
+        if not self._running:
+            return
+        self._handle_peak_sample(peak)
+
+    def _handle_peak_sample(self, peak: float) -> None:
         self._last_peak = float(peak)
         self.peak_level_changed.emit(self._last_peak)
         audible = peak > self._threshold

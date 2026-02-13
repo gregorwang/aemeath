@@ -1,39 +1,67 @@
-{
-  "version": "1.0.0",
-  "trigger": {
-    "idle_threshold_seconds": 180,
-    "jitter_range_seconds": [-30, 60],
-    "auto_dismiss_seconds": 30
-  },
-  "appearance": {
-    "theme": "default",
-    "position": "right",
-    "ascii_width": 60,
-    "font_size_px": 8
-  },
-  "audio": {
-    "tts_voice": "zh-CN-XiaoxiaoNeural",
-    "tts_rate": "+0%",
-    "volume": 0.8,
-    "cache_enabled": true
-  },
-  "behavior": {
-    "full_screen_pause": true,
-    "auto_start_on_login": false,
-    "debug_mode": false
-  },
-  "vision": {
-    "camera_enabled": false,
-    "camera_consent_granted": false,
-    "camera_index": 0,
-    "target_fps": 15,
-    "eye_tracking_enabled": true
-  },
-  "llm": {
-    "provider": "none",
-    "model": "gpt-4o-mini",
-    "base_url": "https://api.openai.com/v1",
-    "ollama_base_url": "http://localhost:11434"
-  }
+﻿{
+    "$schema":  "config_schema.json",
+    "version":  "1.0.0",
+    "trigger":  {
+                    "idle_threshold_seconds":  180,
+                    "jitter_range_seconds":  [
+                                                 -30,
+                                                 60
+                                             ],
+                    "auto_dismiss_seconds":  30
+                },
+    "appearance":  {
+                       "theme":  "default",
+                       "position":  "auto",
+                       "ascii_width":  60,
+                       "font_size_px":  8
+                   },
+    "audio":  {
+                  "tts_voice":  "zh-CN-XiaoxiaoNeural",
+                  "tts_rate":  "+0%",
+                  "volume":  0.8,
+                  "cache_enabled":  true,
+                  "microphone_enabled":  true,
+                  "asr_provider":  "zhipu_asr",
+                  "asr_api_key":  "",
+                  "asr_model":  "glm-asr-2512",
+                  "asr_base_url":  "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+                  "asr_temperature":  0.0,
+                  "asr_prompt":  "",
+                  "voice_input_mode":  "push_to_talk"
+              },
+    "behavior":  {
+                     "full_screen_pause":  true,
+                     "auto_start_on_login":  false,
+                     "debug_mode":  false,
+                     "offline_mode":  false
+                 },
+    "vision":  {
+                   "camera_enabled":  false,
+                   "camera_consent_granted":  false,
+                   "camera_index":  0,
+                   "target_fps":  15,
+                   "eye_tracking_enabled":  true
+               },
+    "wakeup":  {
+                   "enabled":  true,
+                   "phrases":  [
+                                   "小爱同学请你出来",
+                                   "小爱同学出来",
+                                   "小爱同学"
+                               ],
+                   "language":  "zh-CN"
+               },
+    "llm":  {
+                "provider":  "xai",
+                "model":  "grok-4-fast-reasoning",
+                "api_key":  "",
+                "base_url":  "https://api.x.ai/v1"
+            },
+    "screen_commentary":  {
+                              "streaming_enabled":  true,
+                              "ocr_fallback_enabled":  false,
+                              "stream_chunk_chars":  22,
+                              "max_response_chars":  90,
+                              "preamble_text":  "正在看你的屏幕内容，让我看看你在做什么。"
+                          }
 }
-

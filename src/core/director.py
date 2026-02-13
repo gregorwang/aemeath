@@ -65,7 +65,7 @@ class BehaviorMode(Enum):
 class Director(QObject):
     """FSM-based behavior orchestrator with optional Phase 4 AI modules."""
 
-    VOICE_TRAJECTORY_FILE = "trajectory_1770800738.json"
+    VOICE_TRAJECTORY_FILE = "trajectory_1770800738_qt_animation.json"
     LOGGER = logging.getLogger("CyberCompanion")
     EXPRESSION_STATE_MAP = {
         "happy": "state6",
@@ -796,6 +796,41 @@ class Director(QObject):
         if trajectory_data is None:
             self.LOGGER.warning("[SummonTrajectory] 轨迹文件无效，回退普通召唤: %s", trajectory_path)
             return False
+        schema = "unknown"
+        frame_count = 0
+        total_duration = 0.0
+        points = trajectory_data.get("points")
+        keyframes = trajectory_data.get("keyframes")
+        if isinstance(points, list) and points:
+            schema = "points"
+            frame_count = len(points)
+            total_duration = float(trajectory_data.get("total_duration", 0.0) or 0.0)
+            if total_duration <= 0:
+                try:
+                    total_duration = float(points[-1].get("t", 0.0) or 0.0)
+                except Exception:
+                    total_duration = 0.0
+        elif isinstance(keyframes, list) and keyframes:
+            schema = "keyframes"
+            frame_count = len(keyframes)
+            duration_ms = trajectory_data.get("duration_ms")
+            if duration_ms is not None:
+                try:
+                    total_duration = max(0.0, float(duration_ms) / 1000.0)
+                except Exception:
+                    total_duration = 0.0
+            if total_duration <= 0:
+                try:
+                    total_duration = float(keyframes[-1].get("time_ms", 0.0) or 0.0) / 1000.0
+                except Exception:
+                    total_duration = 0.0
+
+        self.LOGGER.info(
+            "[SummonTrajectory] 轨迹解析成功: schema=%s frames=%d duration=%.2fs",
+            schema,
+            frame_count,
+            total_duration,
+        )
 
         gif_map = self._build_voice_trajectory_gif_map()
         if not gif_map:
@@ -820,14 +855,15 @@ class Director(QObject):
             player.finished.connect(self._on_voice_trajectory_finished)
             self._voice_trajectory_player = player
             self._voice_trajectory_playing = True
-            total_duration = float(trajectory_data.get("total_duration", 0.0))
             timeout_ms = max(3000, int((total_duration + 2.0) * 1000))
             self._voice_trajectory_timeout.start(timeout_ms)
             player.start()
             self.LOGGER.info(
-                "[SummonTrajectory] 已启动剧本式登场轨迹: %s (duration=%.2fs)",
+                "[SummonTrajectory] 已启动剧本式登场轨迹: %s (schema=%s duration=%.2fs timeout=%dms)",
                 trajectory_path,
+                schema,
                 total_duration,
+                timeout_ms,
             )
             return True
         except Exception as exc:
@@ -936,9 +972,12 @@ class Director(QObject):
         if not isinstance(payload, dict):
             return None
         points = payload.get("points")
-        if not isinstance(points, list) or not points:
-            return None
-        return payload
+        if isinstance(points, list) and points:
+            return payload
+        keyframes = payload.get("keyframes")
+        if isinstance(keyframes, list) and keyframes:
+            return payload
+        return None
 
     def _build_voice_trajectory_gif_map(self) -> dict[int, str]:
         characters_root = self._base_dir / "characters"

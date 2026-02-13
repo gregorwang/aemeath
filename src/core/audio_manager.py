@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import heapq
-import queue
-import threading
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import Final
 
-from PySide6.QtCore import QObject, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from .asset_manager import Script
@@ -30,17 +28,128 @@ class AudioPriority(IntEnum):
     LOW = 3
 
 
+class _SynthesisWorker(QObject):
+    """Qt worker running in dedicated thread for TTS synthesis."""
+
+    audio_ready = Signal(str, int, bool, int, int)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._running = True
+        self._processing = False
+        self._active_token = 0
+        self._queue: list[tuple[int, int, dict]] = []
+
+    @Slot(object)
+    def enqueue_task(self, payload: object) -> None:
+        if not self._running or not isinstance(payload, dict):
+            return
+        try:
+            priority = int(payload["priority"])
+            order = int(payload["order"])
+            token = int(payload["token"])
+        except Exception:
+            return
+
+        if token > self._active_token:
+            self._active_token = token
+            self._queue.clear()
+        if token < self._active_token:
+            return
+
+        heapq.heappush(self._queue, (priority, order, payload))
+        QTimer.singleShot(0, self._drain_once)
+
+    @Slot(int)
+    def invalidate(self, token: int) -> None:
+        if token > self._active_token:
+            self._active_token = token
+        self._queue.clear()
+
+    @Slot()
+    def stop(self) -> None:
+        self._running = False
+        self._queue.clear()
+
+    def _drain_once(self) -> None:
+        if not self._running or self._processing:
+            return
+        if not self._queue:
+            return
+
+        _, _, task = heapq.heappop(self._queue)
+        token = int(task.get("token", -1))
+        if token != self._active_token:
+            QTimer.singleShot(0, self._drain_once)
+            return
+
+        self._processing = True
+        try:
+            target = Path(str(task["target_path"]))
+            if bool(task.get("cache_enabled", True)) and target.exists():
+                self.audio_ready.emit(
+                    str(target),
+                    int(task["priority"]),
+                    bool(task.get("interrupt", False)),
+                    token,
+                    int(task["order"]),
+                )
+                return
+
+            if edge_tts is None:
+                return
+
+            if not bool(task.get("cache_enabled", True)) and target.exists():
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            asyncio.run(
+                self._synthesize_edge(
+                    text=str(task["text"]),
+                    voice=str(task["voice"]),
+                    voice_rate=str(task["voice_rate"]),
+                    output_path=target,
+                )
+            )
+            self.audio_ready.emit(
+                str(target),
+                int(task["priority"]),
+                bool(task.get("interrupt", False)),
+                token,
+                int(task["order"]),
+            )
+        except Exception:
+            # Keep silent on synthesis errors, same behavior as legacy implementation.
+            pass
+        finally:
+            self._processing = False
+            if self._queue:
+                QTimer.singleShot(0, self._drain_once)
+
+    @staticmethod
+    async def _synthesize_edge(*, text: str, voice: str, voice_rate: str, output_path: Path) -> None:
+        communicator = edge_tts.Communicate(text, voice, rate=voice_rate)  # type: ignore[union-attr]
+        await communicator.save(str(output_path))
+
+
 class AudioManager(QObject):
     """
     Cache-first audio manager with queue and priority interrupt.
 
     - Uses script-provided local audio when available
-    - Falls back to edge-tts generation into local cache
-    - Synthesizes in a background worker thread
+    - Falls back to local/remote TTS generation into local cache
+    - Synthesizes in a Qt background worker thread
     - Supports playback queue and high-priority interruption
     """
 
     _audio_ready = Signal(str, int, bool, int, int)
+    _tts_enqueue_task = Signal(object)
+    _tts_invalidate = Signal(int)
+    _tts_stop = Signal()
+
     playback_started = Signal(str)
     playback_finished = Signal()
 
@@ -78,16 +187,24 @@ class AudioManager(QObject):
         self._audio_output = QAudioOutput(self)
         self._audio_output.setVolume(min(max(volume, 0.0), 1.0))
         self._player.setAudioOutput(self._audio_output)
-        self._audio_ready.connect(self._on_audio_ready)
-        self._player.mediaStatusChanged.connect(self._on_media_status_changed)
-        self._state_lock = threading.Lock()
+
         self._token = 0
         self._task_seq = 0
         self._playback_heap: list[tuple[int, int, str, int]] = []
-        self._task_queue: queue.PriorityQueue[tuple[int, int, AudioManager._SpeechTask | None]] = queue.PriorityQueue()
         self._running = True
-        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
-        self._worker.start()
+
+        self._audio_ready.connect(self._on_audio_ready)
+        self._player.mediaStatusChanged.connect(self._on_media_status_changed)
+
+        self._worker_thread = QThread(self)
+        self._worker = _SynthesisWorker()
+        self._worker.moveToThread(self._worker_thread)
+        self._worker.audio_ready.connect(self._audio_ready)
+        self._tts_enqueue_task.connect(self._worker.enqueue_task)
+        self._tts_invalidate.connect(self._worker.invalidate)
+        self._tts_stop.connect(self._worker.stop)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
+        self._worker_thread.start()
 
     def speak(
         self,
@@ -137,30 +254,33 @@ class AudioManager(QObject):
         - clear_pending_tts: invalidate pending/in-flight TTS synthesis tasks
         """
         self._player.stop()
-        with self._state_lock:
-            if clear_pending_playback:
-                self._playback_heap.clear()
-            if clear_pending_tts:
-                self._token += 1
+        if clear_pending_playback:
+            self._playback_heap.clear()
+        if clear_pending_tts:
+            self._token += 1
+            self._tts_invalidate.emit(self._token)
         self.playback_finished.emit()
 
     def stop(self) -> None:
-        """Shutdown background worker gracefully."""
-        self.interrupt()
+        """Shutdown synthesis worker gracefully."""
+        if not self._running:
+            return
         self._running = False
-        with self._state_lock:
-            self._task_seq += 1
-            self._task_queue.put((self.LOW_PRIORITY, self._task_seq, None))
-        if self._worker.is_alive():
-            self._worker.join(timeout=2.0)
+        self.interrupt()
+        self._tts_stop.emit()
+        if self._worker_thread.isRunning():
+            self._worker_thread.quit()
+            self._worker_thread.wait(1500)
+
+    def __del__(self) -> None:
+        try:
+            self.stop()
+        except Exception:
+            pass
 
     def _cache_path(self, text: str, voice: str) -> Path:
-        digest = hashlib.md5(f"{voice}:{text}".encode("utf-8")).hexdigest()
+        digest = hashlib.md5(f"edge:{voice}:{self._voice_rate}:{text}".encode("utf-8")).hexdigest()
         return self._cache_dir / f"{digest}.mp3"
-
-    async def _synthesize(self, text: str, output_path: Path) -> None:
-        communicator = edge_tts.Communicate(text, self._voice, rate=self._voice_rate)
-        await communicator.save(str(output_path))
 
     @Slot(str, int, bool, int, int)
     def _on_audio_ready(self, file_path: str, priority: int, interrupt: bool, token: int, order: int) -> None:
@@ -172,14 +292,12 @@ class AudioManager(QObject):
 
         if interrupt or priority == self.CRITICAL_PRIORITY:
             self._player.stop()
-            with self._state_lock:
-                self._playback_heap.clear()
+            self._playback_heap.clear()
             self._start_playback(path)
             return
 
         if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            with self._state_lock:
-                heapq.heappush(self._playback_heap, (priority, order, str(path), token))
+            heapq.heappush(self._playback_heap, (priority, order, str(path), token))
             return
 
         self._start_playback(path)
@@ -190,15 +308,15 @@ class AudioManager(QObject):
             self._play_next()
 
     def _play_next(self) -> None:
-        next_path: str | None = None
-        token: int | None = None
-        with self._state_lock:
-            if self._playback_heap:
-                _, _, next_path, token = heapq.heappop(self._playback_heap)
-        if next_path and token == self._current_token():
+        if not self._playback_heap:
+            self.playback_finished.emit()
+            return
+
+        _, _, next_path, token = heapq.heappop(self._playback_heap)
+        if token == self._current_token():
             self._start_playback(Path(next_path))
             return
-        self.playback_finished.emit()
+        self._play_next()
 
     def _start_playback(self, path: Path) -> None:
         self._player.stop()
@@ -206,43 +324,8 @@ class AudioManager(QObject):
         self._player.play()
         self.playback_started.emit(str(path))
 
-    def _worker_loop(self) -> None:
-        while self._running:
-            try:
-                _, _, task = self._task_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-
-            if task is None:
-                continue
-            if task.token != self._current_token():
-                continue
-
-            target = self._cache_path(text=task.text, voice=self._voice)
-            if self._cache_enabled and target.exists():
-                self._audio_ready.emit(str(target), task.priority, task.interrupt, task.token, task.order)
-                continue
-
-            if edge_tts is None:
-                continue
-
-            if not self._cache_enabled and target.exists():
-                try:
-                    target.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
-            try:
-                asyncio.run(self._synthesize(text=task.text, output_path=target))
-            except Exception:
-                # Offline or synthesis failure should be silent and non-fatal.
-                continue
-
-            self._audio_ready.emit(str(target), task.priority, task.interrupt, task.token, task.order)
-
     def _current_token(self) -> int:
-        with self._state_lock:
-            return self._token
+        return self._token
 
     def set_voice(self, voice: str) -> None:
         self._voice = voice.strip() or self._voice
@@ -253,6 +336,9 @@ class AudioManager(QObject):
     def set_volume(self, volume: float) -> None:
         self._audio_output.setVolume(min(max(volume, 0.0), 1.0))
 
+    def set_cache_enabled(self, enabled: bool) -> None:
+        self._cache_enabled = bool(enabled)
+
     def _enqueue_request(self, *, text: str, audio_path: str | None, priority: int, interrupt: bool) -> None:
         clean_text = text.strip()
         if not clean_text:
@@ -260,10 +346,9 @@ class AudioManager(QObject):
         if interrupt:
             self.interrupt(clear_pending_playback=True, clear_pending_tts=True)
 
+        self._task_seq += 1
+        order = self._task_seq
         token = self._current_token()
-        with self._state_lock:
-            self._task_seq += 1
-            order = self._task_seq
 
         if audio_path:
             local_audio = Path(audio_path)
@@ -276,22 +361,35 @@ class AudioManager(QObject):
             self._audio_ready.emit(str(target), priority, interrupt, token, order)
             return
 
-        if edge_tts is None:
+        if not self._can_synthesize():
             return
 
-        with self._state_lock:
-            task = self._SpeechTask(
-                text=clean_text,
-                priority=priority,
-                interrupt=interrupt,
-                token=token,
-                order=order,
-            )
-            self._task_queue.put((priority, order, task))
+        task = self._SpeechTask(
+            text=clean_text,
+            priority=priority,
+            interrupt=interrupt,
+            token=token,
+            order=order,
+        )
+        self._tts_enqueue_task.emit(
+            {
+                "text": task.text,
+                "priority": task.priority,
+                "interrupt": task.interrupt,
+                "token": task.token,
+                "order": task.order,
+                "target_path": str(target),
+                "voice": self._voice,
+                "voice_rate": self._voice_rate,
+                "cache_enabled": self._cache_enabled,
+            }
+        )
 
     def _has_pending_playback(self) -> bool:
-        with self._state_lock:
-            return bool(self._playback_heap)
+        return bool(self._playback_heap)
+
+    def _can_synthesize(self) -> bool:
+        return edge_tts is not None
 
     @staticmethod
     def _normalize_priority(priority: int | AudioPriority) -> int:
@@ -304,3 +402,4 @@ class AudioManager(QObject):
         if numeric >= int(AudioPriority.LOW):
             return int(AudioPriority.LOW)
         return numeric
+

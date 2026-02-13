@@ -27,6 +27,8 @@ class AssetManagerPhase2Test(unittest.TestCase):
         self.assertTrue(self.manager._match_time_range("22:00-06:00", late))
         self.assertTrue(self.manager._match_time_range("22:00-06:00", datetime(2026, 2, 10, 2, 0)))
         self.assertFalse(self.manager._match_time_range("12:00-13:00", late))
+        self.assertTrue(self.manager._match_time_range("12:00-13:00", datetime(2026, 2, 10, 12, 0)))
+        self.assertFalse(self.manager._match_time_range("12:00-13:00", datetime(2026, 2, 10, 13, 0)))
 
     def test_cooldown_blocks_recent_script(self) -> None:
         script = self.manager.idle_scripts[0]

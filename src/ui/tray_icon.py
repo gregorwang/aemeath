@@ -16,6 +16,7 @@ class SystemTrayManager(QObject):
     settings_requested = Signal()
     status_requested = Signal()
     commentary_requested = Signal()
+    open_logs_requested = Signal()
     quit_requested = Signal()
     character_switch_requested = Signal(str)
     toggle_requested = Signal()
@@ -45,6 +46,9 @@ class SystemTrayManager(QObject):
 
         status_action = self._menu.addAction("状态")
         status_action.triggered.connect(self.status_requested.emit)
+
+        open_logs_action = self._menu.addAction("打开日志目录")
+        open_logs_action.triggered.connect(self.open_logs_requested.emit)
 
         self._menu.addSeparator()
 

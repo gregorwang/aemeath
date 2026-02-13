@@ -6,11 +6,12 @@
 
 ## 2.0 阶段概述
 
-本阶段深入实现两个最硬核的技术子系统：
+本阶段深入实现三个最硬核的技术子系统：
 
 | 子系统 | 比喻 | 核心问题 |
 |--------|------|---------|
 | **感知层** | 神经系统 | 如何精准地知道用户"消失"了多久？ |
+| **视觉渲染** | 皮肤系统 | GIF Sprite 优先显示，以 ASCII 为 fallback 的双模式架构 |
 | **动画层** | 肌肉系统 | 如何让角色"滑"出来而不是"跳"出来？ |
 
 ### 前置依赖
@@ -384,7 +385,109 @@ self._label.setStyleSheet("""
 """)
 ```
 
-### 2.2.3 验收标准
+### 2.2.3 GIF Sprite 渲染模式 (进化版)
+
+> ⚠️ **重要设计变更**: 实际实现中，角色视觉已从纯 ASCII 渲染过渡到 **GIF Sprite 优先 + ASCII fallback** 的双模式架构。
+
+#### 双模式架构概览
+
+```
+EntityWindow (QWidget)
+└─ QStackedLayout
+   ├─ 模式 A: _sprite_label (QLabel + QMovie)
+   │     ├─ 加载 GIF 文件 → QMovie 逐帧播放
+   │     ├─ 加载 PNG/JPG  → QPixmap 静态显示
+   │     └─ CacheAll 模式确保流畅动画
+   │
+   └─ 模式 B: _label (QLabel + RichText HTML)
+         ├─ AsciiRenderer 将图片转为彩色 HTML ASCII
+         └─ 支持视线追踪眼球占位符 {EYE_L}/{EYE_R}
+```
+
+#### Director 显示选择逻辑
+
+```python
+# Director._set_visual_from_script() 的选择逻辑：
+
+def _set_visual_from_script(self, script: Script) -> None:
+    """
+    根据脚本的 sprite_path 决定显示模式:
+    
+    决策流程:
+    1. sprite_path 存在且有效 → 调用 set_sprite_content() → GIF 模式
+    2. sprite_path 加载失败         → fallback 到 ASCII 模式
+    3. sprite_path 为空            → 直接使用 ASCII 渲染
+    
+    注意: GIF 模式下视线追踪不生效（无字符级占位符可替换）
+    """
+    if script.sprite_path and hasattr(self._entity_window, "set_sprite_content"):
+        try:
+            self._entity_window.set_sprite_content(script.sprite_path)
+            self._current_ascii_template = ""  # GIF 模式下清空 ASCII 模板
+            return
+        except Exception:
+            pass  # fallback 到 ASCII
+    # ASCII fallback
+    self._current_ascii_template = self._resolve_ascii_content(script)
+    self._entity_window.set_ascii_content(self._current_ascii_template)
+```
+
+#### QMovie 生命周期管理
+
+```python
+def set_sprite_content(self, sprite_path: Path | str) -> None:
+    """
+    GIF 资源管理要点:
+    
+    1. 加载新 GIF 前必须停止并释放旧 QMovie (避免内存泄漏)
+    2. 使用 QMovie.CacheMode.CacheAll 缓存所有帧 (避免重复解码)
+    3. 设置 movie 后调用 adjustSize() 确保窗口尺寸适配内容
+    4. 静态图片 (PNG/JPG) 使用 QPixmap 加载，无需 QMovie
+    """
+    path = Path(sprite_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Sprite not found: {path}")
+
+    self._content_stack.setCurrentWidget(self._sprite_label)
+    if path.suffix.lower() == ".gif":
+        movie = QMovie(str(path))
+        if not movie.isValid():
+            raise ValueError(f"Invalid GIF: {path}")
+        self._stop_movie()                              # 释放旧资源
+        movie.setCacheMode(QMovie.CacheMode.CacheAll)   # 缓存所有帧
+        self._sprite_label.setMovie(movie)
+        self._movie = movie
+        self._movie.start()
+    else:
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            raise ValueError(f"Invalid image: {path}")
+        self._stop_movie()
+        self._sprite_label.setPixmap(pixmap)
+    self._sprite_label.adjustSize()
+    self.adjustSize()
+```
+
+#### 角色资源目录结构
+
+```
+characters/
+├─ aemeath.gif         ← 项目级预览 GIF
+├─ state1.gif ~ state7.gif  ← 多状态表情 GIF
+└─ default/
+   ├─ manifest.json       ← 角色元数据 (preview_image 指向 GIF)
+   ├─ scripts.json        ← 台词配置 (sprite 字段指向 GIF)
+   ├─ scripts/
+   │  └─ dialogue.yaml    ← YAML 台词配置 (animation.sprite 字段)
+   └─ assets/
+      └─ sprites/
+         ├─ aemeath.gif    ← 默认 idle 动画
+         ├─ panic.gif      ← 惊吓表情动画
+         ├─ idle.png       ← 静态 idle 图片 (fallback)
+         └─ peek.png       ← 探头静态图片
+```
+
+### 2.2.4 验收标准
 
 | # | 验收项 | 测试方法 | 预期结果 |
 |---|--------|---------|---------|
@@ -393,6 +496,10 @@ self._label.setStyleSheet("""
 | 3 | PNG 透明通道 | 使用带 alpha 的 PNG | 透明区域正确镂空 |
 | 4 | 比例正确 | 与原图对比 | ASCII 画不变形（无拉伸） |
 | 5 | 渲染性能 | 计时 60 列宽渲染 | 单帧 < 50ms |
+| 6 | **GIF 动画播放** | 加载多帧 GIF | QMovie 正常循环播放，无闪烁 |
+| 7 | **双模式切换** | 有/无 sprite_path 的脚本 | GIF 和 ASCII 模式可无缝切换 |
+| 8 | **QMovie 内存释放** | 多次切换 GIF | 无内存泄漏，旧 Movie 被正确释放 |
+| 9 | **GIF 加载失败 fallback** | 使用无效 GIF 路径 | 自动 fallback 到 ASCII 字符画 |
 
 ---
 

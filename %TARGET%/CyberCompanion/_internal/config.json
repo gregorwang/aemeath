@@ -1,0 +1,65 @@
+{
+  "$schema": "config_schema.json",
+  "version": "1.0.0",
+  "trigger": {
+    "idle_threshold_seconds": 180,
+    "jitter_range_seconds": [
+      -30,
+      60
+    ],
+    "auto_dismiss_seconds": 30
+  },
+  "appearance": {
+    "theme": "default",
+    "position": "auto",
+    "ascii_width": 60,
+    "font_size_px": 8
+  },
+  "audio": {
+    "tts_provider": "edge",
+    "tts_voice": "zh-CN-XiaoxiaoNeural",
+    "tts_rate": "+0%",
+    "volume": 0.8,
+    "cache_enabled": true,
+    "microphone_enabled": true,
+    "gemini_api_key": "",
+    "gemini_model": "gemini-2.5-flash-preview-tts",
+    "gemini_voice": "Kore",
+    "gemini_base_url": "https://generativelanguage.googleapis.com",
+    "asr_provider": "openai_whisper",
+    "asr_api_key": "",
+    "asr_model": "whisper-1",
+    "asr_base_url": "https://api.openai.com/v1",
+    "asr_temperature": 0.0,
+    "asr_prompt": ""
+  },
+  "behavior": {
+    "full_screen_pause": true,
+    "auto_start_on_login": false,
+    "debug_mode": false,
+    "offline_mode": false
+  },
+  "vision": {
+    "camera_enabled": false,
+    "camera_consent_granted": false,
+    "camera_index": 0,
+    "target_fps": 15,
+    "eye_tracking_enabled": true
+  },
+  "wakeup": {
+    "enabled": true,
+    "phrases": [
+      "小爱同学请你出来",
+      "小爱同学出来",
+      "小爱同学"
+    ],
+    "language": "zh-CN"
+  },
+  "llm": {
+    "provider": "ollama",
+    "model": "gpt-4o-mini",
+    "api_key": "",
+    "base_url": "https://api.openai.com/v1",
+    "ollama_base_url": "http://localhost:11434"
+  }
+}

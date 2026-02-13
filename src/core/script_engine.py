@@ -4,6 +4,7 @@ import random
 from datetime import datetime, timedelta
 
 from .asset_manager import Script
+from .time_range import is_default_time_range, matches_time_range
 
 
 class ScriptEngine:
@@ -115,23 +116,7 @@ class ScriptEngine:
         return result
 
     def _is_time_match(self, script: Script, now: datetime) -> bool:
-        time_range = (script.time_range or "default").strip().lower()
-        if time_range == "default":
-            return True
-        if "-" not in time_range:
-            return False
-
-        start_text, end_text = time_range.split("-", 1)
-        try:
-            start_minutes = self._to_minutes(start_text)
-            end_minutes = self._to_minutes(end_text)
-        except ValueError:
-            return False
-
-        current = now.hour * 60 + now.minute
-        if start_minutes <= end_minutes:
-            return start_minutes <= current <= end_minutes
-        return current >= start_minutes or current <= end_minutes
+        return matches_time_range(script.time_range, now)
 
     def _is_cooling_down(self, script: Script, now: datetime) -> bool:
         if script.cooldown_minutes <= 0:
@@ -148,13 +133,4 @@ class ScriptEngine:
 
     @staticmethod
     def _is_default_range(script: Script) -> bool:
-        return (script.time_range or "default").strip().lower() == "default"
-
-    @staticmethod
-    def _to_minutes(value: str) -> int:
-        hh_str, mm_str = value.strip().split(":")
-        hh = int(hh_str)
-        mm = int(mm_str)
-        if not (0 <= hh < 24 and 0 <= mm < 60):
-            raise ValueError("Invalid HH:MM")
-        return hh * 60 + mm
+        return is_default_time_range(script.time_range)
