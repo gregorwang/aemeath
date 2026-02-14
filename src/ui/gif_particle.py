@@ -12,16 +12,13 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
 import json
+from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve,
     QPoint,
     QPropertyAnimation,
-    QFile,
-    QResource,
     QSequentialAnimationGroup,
     QTimer,
     QVariantAnimation,
@@ -30,6 +27,11 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QGuiApplication, QMovie
 from PySide6.QtWidgets import QLabel, QWidget
+
+try:
+    from ui._file_helpers import normalize_asset_path, path_exists
+except ModuleNotFoundError:
+    from ._file_helpers import normalize_asset_path, path_exists
 
 
 @dataclass
@@ -93,18 +95,18 @@ class GifParticle(QWidget):
             self.setWindowOpacity(self._config.opacity)
 
     def _setup_gif(self) -> None:
-        path = Path(self._config.gif_path)
-        if not path.exists():
-            print(f"[GifParticle] GIF 文件未找到: {path}")
+        source = normalize_asset_path(self._config.gif_path)
+        if not path_exists(source):
+            print(f"[GifParticle] GIF 文件未找到: {self._config.gif_path}")
             return
 
         label = QLabel(self)
         label.setStyleSheet("QLabel { background: transparent; }")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        movie = QMovie(str(path))
+        movie = QMovie(source)
         if not movie.isValid():
-            print(f"[GifParticle] 无效的 GIF: {path}")
+            print(f"[GifParticle] 无效的 GIF: {source}")
             return
 
         movie.setCacheMode(QMovie.CacheMode.CacheAll)
@@ -260,7 +262,7 @@ class TrajectoryPlayer(QWidget):
 
     MIN_STATE_SWITCH_INTERVAL_S = 0.05
 
-    def __init__(self, trajectory_data: dict, gif_map: dict[int, str], parent=None):
+    def __init__(self, trajectory_data: dict, gif_map: dict[int, str], parent: QWidget | None = None):
         super().__init__(parent)
         self._points = self._sanitize_points(self._extract_points(trajectory_data))
         self._total_duration = self._resolve_total_duration(trajectory_data, self._points)
@@ -368,8 +370,8 @@ class TrajectoryPlayer(QWidget):
         candidate_sizes: list = []
 
         for state_id, gif_file in self._gif_map.items():
-            source = str(gif_file).strip()
-            if not self._path_exists(source):
+            source = normalize_asset_path(gif_file)
+            if not path_exists(source):
                 continue
             movie = QMovie(source, parent=self)
             if not movie.isValid():
@@ -396,14 +398,6 @@ class TrajectoryPlayer(QWidget):
                 movie.setScaledSize(self._base_size)
             self._label.resize(self._base_size)
             self.resize(self._base_size)
-
-    @staticmethod
-    def _path_exists(path_text: str) -> bool:
-        if not path_text:
-            return False
-        if path_text.startswith(":/"):
-            return QFile.exists(path_text) or QResource(path_text).isValid()
-        return Path(path_text).exists()
 
     def start(self) -> None:
         if not self._points:
@@ -493,8 +487,8 @@ class TrajectoryPlayer(QWidget):
             gif_file = self._gif_map.get(state_id)
             if not gif_file:
                 return
-            source = str(gif_file).strip()
-            if not self._path_exists(source):
+            source = normalize_asset_path(gif_file)
+            if not path_exists(source):
                 return
             movie = QMovie(source, parent=self)
             if not movie.isValid():
@@ -546,7 +540,7 @@ class GifParticleManager(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._active_particles: dict[int, GifParticle] = {}
+        self._active_particles: dict[int, GifParticle | TrajectoryPlayer] = {}
         self._next_id = 0
         self.hide()  # The manager widget itself is invisible
 
@@ -568,11 +562,9 @@ class GifParticleManager(QWidget):
 
         player = TrajectoryPlayer(data, gif_map)
         pid = player.particle_id
-        
-        # Use a lambda or partial to handle the signal typing
-        player.finished.connect(lambda p: self._active_particles.pop(p.particle_id, None))
-        
-        self._active_particles[pid] = player # type: ignore
+
+        player.finished.connect(self._on_trajectory_finished)
+        self._active_particles[pid] = player
         player.start()
 
     @property
@@ -661,3 +653,7 @@ class GifParticleManager(QWidget):
     def _on_particle_finished(self, particle: GifParticle) -> None:
         """Handle particle lifecycle completion."""
         self._active_particles.pop(particle.particle_id, None)
+
+    def _on_trajectory_finished(self, player: TrajectoryPlayer) -> None:
+        """Handle trajectory player lifecycle completion."""
+        self._active_particles.pop(player.particle_id, None)

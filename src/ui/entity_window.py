@@ -4,15 +4,14 @@ import random
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import Literal
 
 from PySide6.QtCore import (
     QAbstractAnimation,
     QPauseAnimation,
     QEasingCurve,
-    QFile,
     QPoint,
     QPropertyAnimation,
-    QResource,
     QSequentialAnimationGroup,
     QTimer,
     Qt,
@@ -20,6 +19,12 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QEnterEvent, QFont, QGuiApplication, QMouseEvent, QMovie, QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QStackedLayout, QVBoxLayout, QWidget
+
+try:
+    from ui._file_helpers import normalize_asset_path, path_exists
+except ModuleNotFoundError:
+    from ._file_helpers import normalize_asset_path, path_exists
+
 try:
     from PySide6.QtStateMachine import QState, QStateMachine
 except Exception:  # pragma: no cover
@@ -61,30 +66,52 @@ class EntityWindow(QWidget):
     """
     Transparent top-most companion window that displays ASCII HTML.
     """
+    AnimPhase = Literal["hidden", "peeking", "engaged", "fleeing", "roaming", "probing"]
+
+    STATE_IDLE = "state1"
+    STATE_EXCITED = "state2"
+    STATE_ROAMING = "state3"
+    STATE_FLEE = "state4"
+    STATE_HOVER = "state5"
+    STATE_GREETING = "state6"
+    STATE_AMBIENT = "state7"
+
+    ANIM_PHASE_HIDDEN: AnimPhase = "hidden"
+    ANIM_PHASE_PEEKING: AnimPhase = "peeking"
+    ANIM_PHASE_ENGAGED: AnimPhase = "engaged"
+    ANIM_PHASE_FLEEING: AnimPhase = "fleeing"
+    ANIM_PHASE_ROAMING: AnimPhase = "roaming"
+    ANIM_PHASE_PROBING: AnimPhase = "probing"
+
+    ANIM_SPEED_SCALE: dict[str, float] = {
+        "slow": 1.2,
+        "normal": 1.0,
+        "fast": 0.8,
+    }
 
     STATE_SEMANTICS = {
-        "state1": "curious_idle",
-        "state2": "excited_click",
-        "state3": "roaming_move",
-        "state4": "shy_flee",
-        "state5": "hover_thinking",
-        "state6": "greeting_click",
-        "state7": "ambient_probe",
+        STATE_IDLE: "curious_idle",
+        STATE_EXCITED: "excited_click",
+        STATE_ROAMING: "roaming_move",
+        STATE_FLEE: "shy_flee",
+        STATE_HOVER: "hover_thinking",
+        STATE_GREETING: "greeting_click",
+        STATE_AMBIENT: "ambient_probe",
     }
     STATE_ALIASES = {
-        "idle": "state1",
-        "curious": "state1",
-        "excited": "state2",
-        "roam": "state3",
-        "moving": "state3",
-        "flee": "state4",
-        "shy": "state4",
-        "hover": "state5",
-        "thinking": "state5",
-        "greeting": "state6",
-        "happy": "state6",
-        "ambient": "state7",
-        "probe": "state7",
+        "idle": STATE_IDLE,
+        "curious": STATE_IDLE,
+        "excited": STATE_EXCITED,
+        "roam": STATE_ROAMING,
+        "moving": STATE_ROAMING,
+        "flee": STATE_FLEE,
+        "shy": STATE_FLEE,
+        "hover": STATE_HOVER,
+        "thinking": STATE_HOVER,
+        "greeting": STATE_GREETING,
+        "happy": STATE_GREETING,
+        "ambient": STATE_AMBIENT,
+        "probe": STATE_AMBIENT,
     }
     ROAM_INTERVAL_MS = (10_000, 20_000)
     PROBE_INTERVAL_MS = (14_000, 24_000)
@@ -102,7 +129,7 @@ class EntityWindow(QWidget):
     _to_roaming = Signal()
     _to_probing = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._current_edge = "right"
         self._current_speed_scale = 1.0
@@ -118,7 +145,7 @@ class EntityWindow(QWidget):
 
         self._state_asset_root = Path.cwd() / "characters"
         self._state_paths: dict[str, str] = {}
-        self._base_state_name = "state1"
+        self._base_state_name = self.STATE_IDLE
         self._rendered_state_name = ""
         self._hover_active = False
         self._click_override_state: str | None = None
@@ -151,7 +178,10 @@ class EntityWindow(QWidget):
 
         self._move_animation: QPropertyAnimation | None = None
         self._probe_sequence: QSequentialAnimationGroup | None = None
-        self._anim_phase = "hidden"
+        self._probe_out_animation: QPropertyAnimation | None = None
+        self._probe_pause: QPauseAnimation | None = None
+        self._probe_back_animation: QPropertyAnimation | None = None
+        self._anim_phase: EntityWindow.AnimPhase = self.ANIM_PHASE_HIDDEN
         self._anim_state_machine: QStateMachine | None = None
         self._summon_sequence: QSequentialAnimationGroup | None = None
         self._summon_peek_animation: QPropertyAnimation | None = None
@@ -166,6 +196,7 @@ class EntityWindow(QWidget):
         self.hide()
 
     def _setup_window_flags(self) -> None:
+        """Apply transparent, always-on-top, and non-focusable window flags."""
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -177,6 +208,7 @@ class EntityWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
     def _setup_ui(self) -> None:
+        """Build ASCII/sprite stacked UI container."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self._label = QLabel(self)
@@ -200,10 +232,14 @@ class EntityWindow(QWidget):
         self.setMinimumSize(120, 60)
 
     def _setup_animations(self) -> None:
+        """Initialize animation-related members."""
         self._flee_animation = None
         self._ensure_summon_sequence()
+        self._ensure_roam_animation()
+        self._ensure_probe_sequence()
 
     def _ensure_summon_sequence(self) -> None:
+        """Lazily build summon sequence (peek -> pause -> enter)."""
         if self._summon_sequence is not None:
             return
         sequence = QSequentialAnimationGroup(self)
@@ -234,10 +270,41 @@ class EntityWindow(QWidget):
         self._summon_pause = pause
         self._summon_enter_animation = enter
 
+    def _ensure_roam_animation(self) -> None:
+        """Lazily build reusable roam slide animation."""
+        if self._move_animation is not None:
+            return
+        anim = QPropertyAnimation(self, b"pos", self)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.finished.connect(self._on_roam_finished)
+        self._move_animation = anim
+
+    def _ensure_probe_sequence(self) -> None:
+        """Lazily build reusable probe sequence (out -> pause -> back)."""
+        if self._probe_sequence is not None:
+            return
+        sequence = QSequentialAnimationGroup(self)
+        out_anim = QPropertyAnimation(self, b"pos", sequence)
+        out_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        pause = QPauseAnimation(600, sequence)
+        back_anim = QPropertyAnimation(self, b"pos", sequence)
+        back_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        sequence.addAnimation(out_anim)
+        sequence.addAnimation(pause)
+        sequence.addAnimation(back_anim)
+        sequence.finished.connect(self._on_probe_finished)
+
+        self._probe_sequence = sequence
+        self._probe_out_animation = out_anim
+        self._probe_pause = pause
+        self._probe_back_animation = back_anim
+
     def _setup_animation_state_machine(self) -> None:
+        """Create phase state machine when QtStateMachine is available."""
         if QStateMachine is None or QState is None:
             self._anim_state_machine = None
-            self._anim_phase = "hidden"
+            self._anim_phase = self.ANIM_PHASE_HIDDEN
             return
 
         machine = QStateMachine(self)
@@ -257,39 +324,47 @@ class EntityWindow(QWidget):
             src.addTransition(self._to_roaming, roaming)
             src.addTransition(self._to_probing, probing)
 
-        hidden.entered.connect(partial(self._mark_anim_phase, "hidden"))
-        peeking.entered.connect(partial(self._mark_anim_phase, "peeking"))
-        engaged.entered.connect(partial(self._mark_anim_phase, "engaged"))
-        fleeing.entered.connect(partial(self._mark_anim_phase, "fleeing"))
-        roaming.entered.connect(partial(self._mark_anim_phase, "roaming"))
-        probing.entered.connect(partial(self._mark_anim_phase, "probing"))
+        hidden.entered.connect(partial(self._mark_anim_phase, self.ANIM_PHASE_HIDDEN))
+        peeking.entered.connect(partial(self._mark_anim_phase, self.ANIM_PHASE_PEEKING))
+        engaged.entered.connect(partial(self._mark_anim_phase, self.ANIM_PHASE_ENGAGED))
+        fleeing.entered.connect(partial(self._mark_anim_phase, self.ANIM_PHASE_FLEEING))
+        roaming.entered.connect(partial(self._mark_anim_phase, self.ANIM_PHASE_ROAMING))
+        probing.entered.connect(partial(self._mark_anim_phase, self.ANIM_PHASE_PROBING))
 
         machine.setInitialState(hidden)
         machine.start()
 
         self._anim_state_machine = machine
-        self._anim_phase = "hidden"
+        self._anim_phase = self.ANIM_PHASE_HIDDEN
 
-    def _mark_anim_phase(self, phase: str) -> None:
+    def _mark_anim_phase(self, phase: AnimPhase) -> None:
+        """Record current animation phase from state machine callbacks."""
         self._anim_phase = phase
 
-    def _transition_anim_phase(self, phase: str) -> None:
+    def _transition_anim_phase(self, phase: AnimPhase) -> None:
+        """Transition phase by emitting the matching state signal."""
         if phase == self._anim_phase:
             return
-        if phase == "hidden":
-            self._to_hidden.emit()
-        elif phase == "peeking":
-            self._to_peeking.emit()
-        elif phase == "engaged":
-            self._to_engaged.emit()
-        elif phase == "fleeing":
-            self._to_fleeing.emit()
-        elif phase == "roaming":
-            self._to_roaming.emit()
-        elif phase == "probing":
-            self._to_probing.emit()
+        transition_signals = {
+            self.ANIM_PHASE_HIDDEN: self._to_hidden,
+            self.ANIM_PHASE_PEEKING: self._to_peeking,
+            self.ANIM_PHASE_ENGAGED: self._to_engaged,
+            self.ANIM_PHASE_FLEEING: self._to_fleeing,
+            self.ANIM_PHASE_ROAMING: self._to_roaming,
+            self.ANIM_PHASE_PROBING: self._to_probing,
+        }
+        signal = transition_signals.get(phase)
+        if signal is not None:
+            signal.emit()
+
+    @classmethod
+    def _resolve_speed_scale(cls, speed_name: str | None, fallback: float = 1.0) -> float:
+        """Resolve animation speed label to duration scale."""
+        key = str(speed_name or "").strip().lower()
+        return cls.ANIM_SPEED_SCALE.get(key, fallback)
 
     def set_state_asset_root(self, root_dir: Path | str) -> None:
+        """Load default state GIFs from folder/resource root."""
         self._state_asset_root = Path(root_dir) if not str(root_dir).startswith(":/") else Path.cwd() / "characters"
         self._state_paths = {}
         root_text = str(root_dir).rstrip("/\\")
@@ -299,11 +374,12 @@ class EntityWindow(QWidget):
                 candidate = f"{root_text}/{state_name}.gif"
             else:
                 candidate = str((self._state_asset_root / f"{state_name}.gif").resolve())
-            if self._path_exists(candidate):
+            if path_exists(candidate):
                 self._state_paths[state_name] = candidate
         self._refresh_state_visual()
 
     def configure_state_assets(self, state_assets: dict[str, Path | str]) -> None:
+        """Override state asset mapping with a validated custom map."""
         normalized: dict[str, str] = {}
         for key, value in state_assets.items():
             state_name = self._normalize_state_name(key)
@@ -312,18 +388,20 @@ class EntityWindow(QWidget):
             raw = str(value).strip()
             if not raw:
                 continue
-            candidate = raw if raw.startswith(":/") else str(Path(raw).resolve())
-            if self._path_exists(candidate):
+            candidate = normalize_asset_path(raw)
+            if path_exists(candidate):
                 normalized[state_name] = candidate
         if normalized:
             self._state_paths = normalized
             self._refresh_state_visual()
 
     def preload_state_movies(self) -> None:
+        """Preload GIF movies for current state map."""
         for path in self._state_paths.values():
             self._get_or_create_movie(path)
 
     def set_state_by_name(self, state_name: str, *, as_base: bool = True) -> bool:
+        """Switch state by semantic name or raw state key."""
         normalized = self._normalize_state_name(state_name)
         if normalized is None:
             return False
@@ -332,9 +410,11 @@ class EntityWindow(QWidget):
         return self._refresh_state_visual()
 
     def set_behavior_state(self, state_name: str, *, as_base: bool = True) -> bool:
+        """Alias of `set_state_by_name` for behavior controller callers."""
         return self.set_state_by_name(state_name, as_base=as_base)
 
     def set_autonomous_enabled(self, enabled: bool) -> None:
+        """Enable or disable autonomous roam/probe behaviors."""
         self._autonomous_enabled = bool(enabled)
         if not self._autonomous_enabled:
             self._stop_autonomy_timers()
@@ -347,10 +427,12 @@ class EntityWindow(QWidget):
         self._schedule_autonomy_timers()
 
     def set_interactive(self, enabled: bool) -> None:
+        """Enable or disable mouse interaction for this window."""
         self._interactive_enabled = bool(enabled)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not self._interactive_enabled)
 
     def set_ascii_content(self, html: str) -> None:
+        """Display rendered ASCII HTML content."""
         self._stop_movie()
         self._content_stack.setCurrentWidget(self._label)
         self._label.setText(html)
@@ -358,11 +440,11 @@ class EntityWindow(QWidget):
         self.adjustSize()
 
     def set_sprite_content(self, sprite_path: Path | str) -> None:
-        raw = str(sprite_path).strip()
-        if not raw:
+        """Display a sprite image/GIF from file path or Qt resource path."""
+        candidate = normalize_asset_path(sprite_path)
+        if not candidate:
             raise FileNotFoundError("Sprite not found: <empty>")
-        candidate = raw if raw.startswith(":/") else str(Path(raw).resolve())
-        if not self._path_exists(candidate):
+        if not path_exists(candidate):
             raise FileNotFoundError(f"Sprite not found: {candidate}")
 
         suffix = Path(candidate).suffix.lower()
@@ -384,18 +466,11 @@ class EntityWindow(QWidget):
         self._sprite_label.adjustSize()
         self.adjustSize()
 
-    @staticmethod
-    def _path_exists(path_text: str) -> bool:
-        if path_text.startswith(":/"):
-            return QFile.exists(path_text) or QResource(path_text).isValid()
-        return Path(path_text).exists()
-
     def _get_or_create_movie(self, path: Path | str) -> QMovie | None:
-        key = str(path).strip()
+        """Fetch cached movie or create one for a GIF asset."""
+        key = normalize_asset_path(path)
         if not key:
             return None
-        if not key.startswith(":/"):
-            key = str(Path(key).resolve())
         cached = self._movie_cache.get(key)
         if cached is not None and cached.isValid():
             return cached
@@ -407,6 +482,7 @@ class EntityWindow(QWidget):
         return movie
 
     def _activate_movie(self, movie: QMovie, *, movie_key: str) -> None:
+        """Attach and start the given movie on sprite label."""
         if self._movie is movie and self._movie_key == movie_key and self._sprite_label.movie() is movie:
             if movie.state() != QMovie.MovieState.Running:
                 movie.start()
@@ -420,6 +496,7 @@ class EntityWindow(QWidget):
             movie.start()
 
     def _stop_movie(self) -> None:
+        """Detach and stop the current sprite movie."""
         if self._movie is None:
             return
         self._movie.stop()
@@ -428,23 +505,26 @@ class EntityWindow(QWidget):
         self._movie_key = None
 
     def _normalize_state_name(self, state_name: str) -> str | None:
+        """Normalize a state alias into canonical `stateN` key."""
         key = (state_name or "").strip().lower()
         if key in self.STATE_SEMANTICS:
             return key
         return self.STATE_ALIASES.get(key)
 
     def _compose_target_state(self) -> str:
+        """Resolve current visual target state from interaction priorities."""
         if self._moving_active:
-            return "state3"
+            return self.STATE_ROAMING
         if self._click_override_state is not None:
             return self._click_override_state
         if self._hover_active:
-            return "state5"
+            return self.STATE_HOVER
         if self._probe_state_name is not None:
             return self._probe_state_name
         return self._base_state_name
 
     def _refresh_state_visual(self) -> bool:
+        """Apply target state sprite and return whether render succeeded."""
         state_name = self._normalize_state_name(self._compose_target_state())
         if state_name is None:
             return False
@@ -462,11 +542,12 @@ class EntityWindow(QWidget):
         return True
 
     def peek(self, edge: str, y_position: int, script=None) -> None:
+        """Run peek animation from screen edge to peeking position."""
         screen = QGuiApplication.primaryScreen()
         if screen is None:
             return
 
-        self._transition_anim_phase("peeking")
+        self._transition_anim_phase(self.ANIM_PHASE_PEEKING)
         self._cancel_animations()
         self._stop_autonomy_timers()
         self._current_edge = edge if edge in {"left", "right"} else "right"
@@ -483,7 +564,7 @@ class EntityWindow(QWidget):
         )
 
         speed_name = getattr(script, "anim_speed", "normal") if script is not None else "normal"
-        self._current_speed_scale = {"slow": 1.2, "normal": 1.0, "fast": 0.8}.get(str(speed_name).lower(), 1.0)
+        self._current_speed_scale = self._resolve_speed_scale(speed_name, 1.0)
 
         self.move(QPoint(self._last_positions.hidden, self._last_y))
         self.show()
@@ -501,6 +582,7 @@ class EntityWindow(QWidget):
         self._peek_animation.start()
 
     def enter(self, script=None) -> None:
+        """Run enter animation from current position to fully visible position."""
         if self._last_positions is None:
             self._rebuild_cached_positions()
         if self._last_positions is None:
@@ -508,10 +590,7 @@ class EntityWindow(QWidget):
 
         speed_name = getattr(script, "anim_speed", "normal") if script is not None else None
         if speed_name:
-            self._current_speed_scale = {"slow": 1.2, "normal": 1.0, "fast": 0.8}.get(
-                str(speed_name).lower(),
-                self._current_speed_scale,
-            )
+            self._current_speed_scale = self._resolve_speed_scale(speed_name, self._current_speed_scale)
         self._enter_animation = self._create_slide_animation(
             start_x=self.x(),
             end_x=self._last_positions.full,
@@ -524,11 +603,12 @@ class EntityWindow(QWidget):
         self._enter_animation.start()
 
     def summon(self, edge: str, y_position: int, script=None) -> None:
+        """Run combined summon sequence (peek, pause, enter)."""
         screen = QGuiApplication.primaryScreen()
         if screen is None:
             return
 
-        self._transition_anim_phase("peeking")
+        self._transition_anim_phase(self.ANIM_PHASE_PEEKING)
         self._cancel_animations()
         self._stop_autonomy_timers()
         self._current_edge = edge if edge in {"left", "right"} else "right"
@@ -546,7 +626,7 @@ class EntityWindow(QWidget):
         )
 
         speed_name = getattr(script, "anim_speed", "normal") if script is not None else "normal"
-        speed_scale = {"slow": 1.2, "normal": 1.0, "fast": 0.8}.get(str(speed_name).lower(), 1.0)
+        speed_scale = self._resolve_speed_scale(speed_name, 1.0)
         self._current_speed_scale = speed_scale
         self._last_positions = positions
         self._last_y = y_clamped
@@ -577,7 +657,8 @@ class EntityWindow(QWidget):
         self._active_sequence.start()
 
     def flee(self) -> None:
-        self._transition_anim_phase("fleeing")
+        """Run flee animation and hide the window."""
+        self._transition_anim_phase(self.ANIM_PHASE_FLEEING)
         if not self.isVisible():
             if self._active_sequence:
                 self._active_sequence.stop()
@@ -615,7 +696,8 @@ class EntityWindow(QWidget):
         self._flee_animation.start()
 
     def hide_now(self) -> None:
-        self._transition_anim_phase("hidden")
+        """Immediately hide window and stop active autonomous animations."""
+        self._transition_anim_phase(self.ANIM_PHASE_HIDDEN)
         self._cancel_animations()
         self._stop_autonomy_timers()
         self.hide()
@@ -653,7 +735,7 @@ class EntityWindow(QWidget):
         self._stop_probe_animation()
 
     def _on_flee_finished(self) -> None:
-        self._transition_anim_phase("hidden")
+        self._transition_anim_phase(self.ANIM_PHASE_HIDDEN)
         self.hide()
         self.flee_completed.emit()
 
@@ -672,19 +754,19 @@ class EntityWindow(QWidget):
         )
 
     def _on_peek_finished(self) -> None:
-        self._transition_anim_phase("peeking")
+        self._transition_anim_phase(self.ANIM_PHASE_PEEKING)
         self.peek_completed.emit()
         self._schedule_autonomy_timers()
 
     def _on_enter_finished(self) -> None:
-        self._transition_anim_phase("engaged")
+        self._transition_anim_phase(self.ANIM_PHASE_ENGAGED)
         self.enter_completed.emit()
         self._schedule_autonomy_timers()
 
     def _on_summon_sequence_finished(self) -> None:
         if self._active_sequence is self._summon_sequence:
             self._active_sequence = None
-        self._transition_anim_phase("engaged")
+        self._transition_anim_phase(self.ANIM_PHASE_ENGAGED)
         self._schedule_autonomy_timers()
 
     def _double_click_interval(self) -> int:
@@ -790,22 +872,22 @@ class EntityWindow(QWidget):
         if (target - start).manhattanLength() < 40:
             target = QPoint(random.randint(geometry.x(), max_x), random.randint(geometry.y(), max_y))
 
-        anim = QPropertyAnimation(self, b"pos", self)
-        anim.setDuration(random.randint(1_600, 3_200))
-        anim.setStartValue(start)
-        anim.setEndValue(target)
-        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        anim.finished.connect(self._on_roam_finished)
-        self._move_animation = anim
+        self._ensure_roam_animation()
+        if self._move_animation is None:
+            self._schedule_autonomy_timers()
+            return
+        self._move_animation.stop()
+        self._move_animation.setDuration(random.randint(1_600, 3_200))
+        self._move_animation.setStartValue(start)
+        self._move_animation.setEndValue(target)
         self._moving_active = True
-        self._transition_anim_phase("roaming")
+        self._transition_anim_phase(self.ANIM_PHASE_ROAMING)
         self._refresh_state_visual()
-        anim.start()
+        self._move_animation.start()
 
     def _on_roam_finished(self) -> None:
         self._moving_active = False
-        self._move_animation = None
-        self._transition_anim_phase("engaged")
+        self._transition_anim_phase(self.ANIM_PHASE_ENGAGED)
         self.move(self._clamp_point_to_screen(self.pos(), visible_x_ratio=1.0, visible_y_ratio=1.0))
         self._refresh_state_visual()
         self._schedule_autonomy_timers()
@@ -813,7 +895,6 @@ class EntityWindow(QWidget):
     def _stop_move_animation(self) -> None:
         if self._move_animation is not None and self._is_animation_running(self._move_animation):
             self._move_animation.stop()
-        self._move_animation = None
         self._moving_active = False
 
     def _on_probe_timeout(self) -> None:
@@ -847,34 +928,31 @@ class EntityWindow(QWidget):
             target = QPoint(random.randint(geometry.x(), max_x), geometry.y() - height // 2)
             target = self._clamp_point_to_screen(target, visible_x_ratio=1.0, visible_y_ratio=0.5)
 
-        sequence = QSequentialAnimationGroup(self)
-        out_anim = QPropertyAnimation(self, b"pos", sequence)
-        out_anim.setDuration(random.randint(700, 1_200))
-        out_anim.setStartValue(origin)
-        out_anim.setEndValue(target)
-        out_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        back_anim = QPropertyAnimation(self, b"pos", sequence)
-        back_anim.setDuration(random.randint(800, 1_300))
-        back_anim.setStartValue(target)
-        back_anim.setEndValue(origin)
-        back_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-
-        sequence.addAnimation(out_anim)
-        sequence.addPause(random.randint(400, 900))
-        sequence.addAnimation(back_anim)
-        sequence.finished.connect(self._on_probe_finished)
-
-        self._probe_sequence = sequence
-        self._probe_state_name = random.choice(("state1", "state7"))
-        self._transition_anim_phase("probing")
+        self._ensure_probe_sequence()
+        if (
+            self._probe_sequence is None
+            or self._probe_out_animation is None
+            or self._probe_pause is None
+            or self._probe_back_animation is None
+        ):
+            self._schedule_autonomy_timers()
+            return
+        self._probe_sequence.stop()
+        self._probe_out_animation.setDuration(random.randint(700, 1_200))
+        self._probe_out_animation.setStartValue(origin)
+        self._probe_out_animation.setEndValue(target)
+        self._probe_pause.setDuration(random.randint(400, 900))
+        self._probe_back_animation.setDuration(random.randint(800, 1_300))
+        self._probe_back_animation.setStartValue(target)
+        self._probe_back_animation.setEndValue(origin)
+        self._probe_state_name = random.choice((self.STATE_IDLE, self.STATE_AMBIENT))
+        self._transition_anim_phase(self.ANIM_PHASE_PROBING)
         self._refresh_state_visual()
-        sequence.start()
+        self._probe_sequence.start()
 
     def _on_probe_finished(self) -> None:
-        self._probe_sequence = None
         self._probe_state_name = None
-        self._transition_anim_phase("engaged")
+        self._transition_anim_phase(self.ANIM_PHASE_ENGAGED)
         self.move(self._clamp_point_to_screen(self.pos(), visible_x_ratio=1.0, visible_y_ratio=1.0))
         self._refresh_state_visual()
         self._schedule_autonomy_timers()
@@ -882,14 +960,13 @@ class EntityWindow(QWidget):
     def _stop_probe_animation(self) -> None:
         if self._probe_sequence is not None and self._is_animation_running(self._probe_sequence):
             self._probe_sequence.stop()
-        self._probe_sequence = None
         self._probe_state_name = None
         if self.isVisible():
             self.move(self._clamp_point_to_screen(self.pos(), visible_x_ratio=1.0, visible_y_ratio=1.0))
 
     def _on_single_left_click(self) -> None:
-        self._base_state_name = "state1"
-        self._click_override_state = random.choice(("state2", "state6"))
+        self._base_state_name = self.STATE_IDLE
+        self._click_override_state = random.choice((self.STATE_EXCITED, self.STATE_GREETING))
         self._refresh_state_visual()
         self._click_restore_timer.start(self.CLICK_RESTORE_MS)
 
@@ -979,14 +1056,14 @@ class EntityWindow(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def showEvent(self, event) -> None:
-        if self._anim_phase == "hidden":
-            self._transition_anim_phase("engaged")
+        if self._anim_phase == self.ANIM_PHASE_HIDDEN:
+            self._transition_anim_phase(self.ANIM_PHASE_ENGAGED)
         self._refresh_state_visual()
         self._schedule_autonomy_timers()
         super().showEvent(event)
 
     def hideEvent(self, event) -> None:
-        self._transition_anim_phase("hidden")
+        self._transition_anim_phase(self.ANIM_PHASE_HIDDEN)
         self._stop_autonomy_timers()
         self._stop_move_animation()
         self._stop_probe_animation()
