@@ -52,6 +52,8 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             config.screen_commentary.stream_chunk_chars = 18
             config.screen_commentary.max_response_chars = 66
             config.screen_commentary.preamble_text = "我先看一眼你的屏幕。"
+            config.screen_commentary.auto_enabled = True
+            config.screen_commentary.auto_interval_minutes = 15
             self.assertTrue(manager.save(config))
 
             loaded = manager.load()
@@ -75,6 +77,8 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             self.assertEqual(loaded.screen_commentary.stream_chunk_chars, 18)
             self.assertEqual(loaded.screen_commentary.max_response_chars, 66)
             self.assertEqual(loaded.screen_commentary.preamble_text, "我先看一眼你的屏幕。")
+            self.assertTrue(loaded.screen_commentary.auto_enabled)
+            self.assertEqual(loaded.screen_commentary.auto_interval_minutes, 15)
 
 
 if __name__ == "__main__":

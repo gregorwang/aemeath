@@ -62,6 +62,8 @@
                               "ocr_fallback_enabled":  false,
                               "stream_chunk_chars":  22,
                               "max_response_chars":  90,
-                              "preamble_text":  "正在看你的屏幕内容，让我看看你在做什么。"
+                              "preamble_text":  "正在看你的屏幕内容，让我看看你在做什么。",
+                              "auto_enabled":  false,
+                              "auto_interval_minutes":  60
                           }
 }

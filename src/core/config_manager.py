@@ -80,6 +80,8 @@ class ScreenCommentaryConfig:
     stream_chunk_chars: int = 22
     max_response_chars: int = 90
     preamble_text: str = "正在看你的屏幕内容，让我看看你在做什么。"
+    auto_enabled: bool = False
+    auto_interval_minutes: int = 60
 
 
 @dataclass(slots=True)
@@ -215,6 +217,8 @@ class ConfigManager:
                 "stream_chunk_chars": int(config.screen_commentary.stream_chunk_chars),
                 "max_response_chars": int(config.screen_commentary.max_response_chars),
                 "preamble_text": str(config.screen_commentary.preamble_text),
+                "auto_enabled": bool(config.screen_commentary.auto_enabled),
+                "auto_interval_minutes": int(config.screen_commentary.auto_interval_minutes),
             },
         }
 
@@ -374,4 +378,6 @@ class ConfigManager:
             preamble_text=str(
                 payload.get("preamble_text", "正在看你的屏幕内容，让我看看你在做什么。")
             ),
+            auto_enabled=bool(payload.get("auto_enabled", False)),
+            auto_interval_minutes=max(1, min(1440, int(payload.get("auto_interval_minutes", 60)))),
         )

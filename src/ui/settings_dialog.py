@@ -115,6 +115,12 @@ class SettingsDialog(QDialog):
         self.screen_max_chars_spin.setRange(20, 300)
         self.screen_preamble_edit = QLineEdit(self)
         self.screen_preamble_edit.setPlaceholderText("例如：正在看你的屏幕内容，让我看看你在做什么。")
+        self.screen_auto_commentary_checkbox = QCheckBox("启用定时自动屏幕解读", self)
+        self.screen_auto_commentary_checkbox.toggled.connect(self._on_screen_auto_toggled)
+        self.screen_auto_interval_spin = QSpinBox(self)
+        self.screen_auto_interval_spin.setRange(1, 240)
+        self.screen_auto_interval_spin.setSuffix(" 分钟")
+        self.screen_auto_interval_spin.setToolTip("应用运行多久自动触发一次屏幕解读。")
         ai_form.addRow("LLM 提供商", self.provider_combo)
         ai_form.addRow("官方端点预设", self.endpoint_preset_combo)
         ai_form.addRow("模型", self.model_combo)
@@ -124,6 +130,8 @@ class SettingsDialog(QDialog):
         ai_form.addRow("流式分段字数", self.screen_chunk_chars_spin)
         ai_form.addRow("单次最大回复字数", self.screen_max_chars_spin)
         ai_form.addRow("屏幕解读过渡语", self.screen_preamble_edit)
+        ai_form.addRow("", self.screen_auto_commentary_checkbox)
+        ai_form.addRow("自动解读间隔", self.screen_auto_interval_spin)
 
         voice_layout = QVBoxLayout(voice_tab)
         vision_box = QGroupBox("视觉 (CV)", voice_tab)
@@ -231,6 +239,9 @@ class SettingsDialog(QDialog):
         self.screen_chunk_chars_spin.setValue(max(8, min(80, int(config.screen_commentary.stream_chunk_chars))))
         self.screen_max_chars_spin.setValue(max(20, min(300, int(config.screen_commentary.max_response_chars))))
         self.screen_preamble_edit.setText(config.screen_commentary.preamble_text)
+        self.screen_auto_commentary_checkbox.setChecked(bool(config.screen_commentary.auto_enabled))
+        self.screen_auto_interval_spin.setValue(max(1, min(240, int(config.screen_commentary.auto_interval_minutes))))
+        self._on_screen_auto_toggled(self.screen_auto_commentary_checkbox.isChecked())
 
         self.camera_enabled_checkbox.setChecked(bool(config.vision.camera_enabled))
         self.eye_tracking_checkbox.setChecked(bool(config.vision.eye_tracking_enabled))
@@ -328,6 +339,8 @@ class SettingsDialog(QDialog):
                 max_response_chars=int(self.screen_max_chars_spin.value()),
                 preamble_text=self.screen_preamble_edit.text().strip()
                 or self._source.screen_commentary.preamble_text,
+                auto_enabled=self.screen_auto_commentary_checkbox.isChecked(),
+                auto_interval_minutes=int(self.screen_auto_interval_spin.value()),
             ),
         )
 
@@ -389,3 +402,6 @@ class SettingsDialog(QDialog):
             return
         self.asr_model_edit.setPlaceholderText("xai_realtime: grok-2-mini-transcribe")
         self.asr_base_url_edit.setPlaceholderText("xai_realtime 建议 https://api.x.ai/v1")
+
+    def _on_screen_auto_toggled(self, enabled: bool) -> None:
+        self.screen_auto_interval_spin.setEnabled(bool(enabled))

@@ -62,6 +62,10 @@ class BehaviorMode(Enum):
     SUMMONING = auto()
 
 
+class ScriptedEntranceError(RuntimeError):
+    """Raised when scripted summon trajectory is required but unavailable/invalid."""
+
+
 class Director(QObject):
     """FSM-based behavior orchestrator with optional Phase 4 AI modules."""
 
@@ -126,6 +130,12 @@ class Director(QObject):
         self._screen_commentator = screen_commentator
         self._gif_state_mapper = gif_state_mapper
         self._audio_output_monitor = audio_output_monitor
+        self._auto_screen_commentary_enabled = bool(
+            getattr(getattr(app_config, "screen_commentary", None), "auto_enabled", False)
+        )
+        self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
+        self._screen_commentary_state_lock = threading.Lock()
+        self._screen_commentary_active_count = 0
 
         self._gaze_tracker = gaze_tracker
         if self._camera_enabled and not self._camera_consent:
@@ -163,6 +173,9 @@ class Director(QObject):
         self._prolonged_idle_timer.setSingleShot(True)
         self._prolonged_idle_timer.setInterval(10 * 60 * 1000)  # 10 minutes
         self._prolonged_idle_timer.timeout.connect(self._on_prolonged_idle)
+        self._auto_screen_commentary_timer = QTimer(self)
+        self._auto_screen_commentary_timer.setSingleShot(True)
+        self._auto_screen_commentary_timer.timeout.connect(self._on_auto_screen_commentary_timeout)
 
         self._state_machine.register_state_handler(EntityState.HIDDEN, on_enter=self._enter_hidden)
         self._state_machine.register_state_handler(
@@ -198,6 +211,8 @@ class Director(QObject):
         # Wire state machine changes to gif mapper
         if self._gif_state_mapper:
             self._state_machine.state_changed.connect(self._on_state_changed_for_particles)
+
+        self._sync_auto_screen_commentary_timer()
 
     @property
     def current_state(self) -> EntityState:
@@ -267,17 +282,28 @@ class Director(QObject):
         if self._idle_monitor is not None:
             self._idle_monitor.reset_to_standby()
 
-    def request_screen_commentary(self) -> None:
+    def request_screen_commentary(self, *, source: str = "manual") -> None:
         if self._screen_commentator is None:
             self.LOGGER.warning("[ScreenCommentary] Skipped: commentator unavailable")
             return
-        self.LOGGER.info("[ScreenCommentary] Requested by user")
+        source_name = (source or "manual").strip().lower() or "manual"
+        if source_name == "timer":
+            if self._full_screen_pause and self._is_fullscreen_app_running():
+                self.LOGGER.info("[ScreenCommentary] Auto trigger skipped: fullscreen app running")
+                return
+            with self._screen_commentary_state_lock:
+                if self._screen_commentary_active_count > 0:
+                    self.LOGGER.info("[ScreenCommentary] Auto trigger skipped: previous request still running")
+                    return
+        self.LOGGER.info("[ScreenCommentary] Requested source=%s", source_name)
         self._mood_system.on_engaged()
         self._set_entity_state("state5", as_base=False)
         try:
             self._screen_commentator.cancel_current_session()
         except Exception:
             pass
+        with self._screen_commentary_state_lock:
+            self._screen_commentary_active_count += 1
 
         def _worker() -> None:
             try:
@@ -294,8 +320,15 @@ class Director(QObject):
                 return
             finally:
                 self._set_entity_state("state1", as_base=False)
+                with self._screen_commentary_state_lock:
+                    self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
 
-        threading.Thread(target=_worker, daemon=True).start()
+        try:
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception:
+            with self._screen_commentary_state_lock:
+                self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
+            raise
 
     def summon_now(self) -> bool:
         """
@@ -304,16 +337,18 @@ class Director(QObject):
         state = self._state_machine.current_state
         if state == EntityState.FLEEING:
             return False
+        previous_mode = getattr(self, "_behavior_mode", BehaviorMode.BUSY)
         behavior_setter = getattr(self, "_set_behavior_mode", None)
         if callable(behavior_setter):
             behavior_setter(BehaviorMode.SUMMONING, apply_visual=False)
         if state == EntityState.HIDDEN:
-            if self._try_start_voice_scripted_entrance():
+            try:
+                self._try_start_voice_scripted_entrance()
                 return True
-            self._silent_presence_mode = False
-            if self._gif_state_mapper:
-                self._gif_state_mapper.on_summoned()
-            return self._state_machine.transition_to(EntityState.ENGAGED)
+            except Exception:
+                if callable(behavior_setter):
+                    behavior_setter(previous_mode, apply_visual=False)
+                raise
         if state == EntityState.PEEKING:
             return self._state_machine.transition_to(EntityState.ENGAGED)
         if state == EntityState.ENGAGED:
@@ -349,6 +384,8 @@ class Director(QObject):
         self._full_screen_pause = bool(app_config.behavior.full_screen_pause)
         self._audio_output_reactive = bool(app_config.behavior.audio_output_reactive)
         self._preferred_position = (app_config.appearance.position or "auto").lower()
+        self._auto_screen_commentary_enabled = bool(app_config.screen_commentary.auto_enabled)
+        self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
         self._eye_tracking_enabled = bool(app_config.vision.eye_tracking_enabled)
         self._camera_consent = bool(app_config.vision.camera_consent_granted)
         self._camera_enabled = bool(app_config.vision.camera_enabled) and self._camera_consent
@@ -372,6 +409,7 @@ class Director(QObject):
         ):
             self._on_audio_output_started()
         self._arm_idle_threshold_with_jitter()
+        self._sync_auto_screen_commentary_timer()
 
     def get_status_summary(self) -> str:
         offline_mode = bool(getattr(getattr(self._config, "behavior", None), "offline_mode", False))
@@ -390,6 +428,8 @@ class Director(QObject):
     def shutdown(self) -> None:
         self._stop_voice_scripted_entrance()
         self._stop_auto_dismiss_timer()
+        if self._auto_screen_commentary_timer.isActive():
+            self._auto_screen_commentary_timer.stop()
         if self._mood_decay_timer.isActive():
             self._mood_decay_timer.stop()
         if self._prolonged_idle_timer.isActive():
@@ -514,7 +554,12 @@ class Director(QObject):
             self.LOGGER.debug("[AudioOutputMonitor] 忽略本进程语音播放触发的音频输出")
             return
         if self._state_machine.current_state == EntityState.HIDDEN:
-            self._audio_forced_visible = bool(self.summon_now())
+            try:
+                self._audio_forced_visible = bool(self.summon_now())
+            except ScriptedEntranceError as exc:
+                self._audio_forced_visible = False
+                self.LOGGER.error("[SummonTrajectory] 音频触发召唤失败: %s", exc)
+                return
         self._audio_output_active = True
         if self._gif_state_mapper:
             self._gif_state_mapper.on_audio_started()
@@ -571,10 +616,22 @@ class Director(QObject):
             self._state_machine.transition_to(EntityState.HIDDEN)
 
     @Slot()
+    def _on_auto_screen_commentary_timeout(self) -> None:
+        # Rearm first so timing cadence remains stable even if the trigger path fails.
+        self._sync_auto_screen_commentary_timer()
+        if not self._auto_screen_commentary_enabled:
+            return
+        self.LOGGER.info(
+            "[ScreenCommentary] Auto trigger fired: interval=%dmin",
+            max(1, int(self._auto_screen_commentary_interval_ms / 60000)),
+        )
+        self.request_screen_commentary(source="timer")
+
+    @Slot()
     def _on_voice_trajectory_timeout(self) -> None:
         if not self._voice_trajectory_playing:
             return
-        self.LOGGER.warning("[SummonTrajectory] 剧本式登场轨迹播放超时，强制进入 ENGAGED。")
+        self.LOGGER.warning("[SummonTrajectory] 剧本式登场轨迹播放超时，强制进入 HIDDEN。")
         self._cleanup_voice_trajectory_player()
         self._complete_voice_scripted_entrance()
 
@@ -589,13 +646,38 @@ class Director(QObject):
             return
         if self._voice_trajectory_player is not None and player_obj is not self._voice_trajectory_player:
             return
-        self.LOGGER.info("[SummonTrajectory] 剧本式登场轨迹播放完成，进入 ENGAGED。")
+        self.LOGGER.info("[SummonTrajectory] 剧本式登场轨迹播放完成，进入 HIDDEN。")
         self._cleanup_voice_trajectory_player()
         self._complete_voice_scripted_entrance()
 
     def _stop_auto_dismiss_timer(self) -> None:
         if self._auto_dismiss_timer.isActive():
             self._auto_dismiss_timer.stop()
+
+    @staticmethod
+    def _resolve_auto_screen_commentary_interval_ms(app_config: AppConfig | None) -> int:
+        raw_minutes = getattr(getattr(app_config, "screen_commentary", None), "auto_interval_minutes", 60)
+        try:
+            minutes = int(raw_minutes)
+        except Exception:
+            minutes = 60
+        minutes = max(1, min(1440, minutes))
+        return minutes * 60 * 1000
+
+    def _sync_auto_screen_commentary_timer(self) -> None:
+        if self._auto_screen_commentary_timer.isActive():
+            self._auto_screen_commentary_timer.stop()
+        if not self._auto_screen_commentary_enabled:
+            self.LOGGER.info("[ScreenCommentary] Auto timer disabled")
+            return
+        if self._screen_commentator is None:
+            self.LOGGER.info("[ScreenCommentary] Auto timer unavailable: commentator is None")
+            return
+        self._auto_screen_commentary_timer.start(self._auto_screen_commentary_interval_ms)
+        self.LOGGER.info(
+            "[ScreenCommentary] Auto timer armed: every %d min",
+            max(1, int(self._auto_screen_commentary_interval_ms / 60000)),
+        )
 
     def _arm_idle_threshold_with_jitter(self) -> None:
         if self._idle_monitor is None:
@@ -789,13 +871,15 @@ class Director(QObject):
 
         trajectory_path = self._resolve_voice_trajectory_path()
         if trajectory_path is None:
-            self.LOGGER.info("[SummonTrajectory] 未找到剧本轨迹文件，回退普通召唤。")
-            return False
+            message = "[SummonTrajectory] 未找到剧本轨迹文件，无法执行召唤。"
+            self.LOGGER.error(message)
+            raise ScriptedEntranceError(message)
 
         trajectory_data = self._load_trajectory_data(trajectory_path)
         if trajectory_data is None:
-            self.LOGGER.warning("[SummonTrajectory] 轨迹文件无效，回退普通召唤: %s", trajectory_path)
-            return False
+            message = f"[SummonTrajectory] 轨迹文件无效，无法执行召唤: {trajectory_path}"
+            self.LOGGER.error(message)
+            raise ScriptedEntranceError(message)
         schema = "unknown"
         frame_count = 0
         total_duration = 0.0
@@ -834,8 +918,9 @@ class Director(QObject):
 
         gif_map = self._build_voice_trajectory_gif_map()
         if not gif_map:
-            self.LOGGER.warning("[SummonTrajectory] 缺少轨迹状态 GIF 映射，回退普通召唤。")
-            return False
+            message = "[SummonTrajectory] 缺少轨迹状态 GIF 映射，无法执行召唤。"
+            self.LOGGER.error(message)
+            raise ScriptedEntranceError(message)
 
         try:
             if hasattr(self._entity_window, "hide_now"):
@@ -869,25 +954,19 @@ class Director(QObject):
         except Exception as exc:
             self.LOGGER.exception("[SummonTrajectory] 启动剧本式登场失败: %s", exc)
             self._cleanup_voice_trajectory_player()
-            return False
+            raise ScriptedEntranceError(f"[SummonTrajectory] 启动剧本式登场失败: {exc}") from exc
 
     def _complete_voice_scripted_entrance(self) -> None:
         if self._gif_state_mapper:
             self._gif_state_mapper.on_summoned()
-        self._set_behavior_mode(BehaviorMode.SUMMONING, apply_visual=False)
+        self._stop_auto_dismiss_timer()
+        self._set_entity_autonomous(False)
+        self._set_behavior_mode(BehaviorMode.BUSY, apply_visual=False)
         state = self._state_machine.current_state
         if state == EntityState.FLEEING:
             return
-        if state == EntityState.HIDDEN:
-            self._state_machine.transition_to(EntityState.ENGAGED)
-            return
-        if state == EntityState.PEEKING:
-            self._state_machine.transition_to(EntityState.ENGAGED)
-            return
-        if state == EntityState.ENGAGED:
-            self._apply_behavior_mode_visual()
-            self._set_entity_autonomous(True)
-            self._auto_dismiss_timer.start(self._auto_dismiss_ms)
+        if state in (EntityState.PEEKING, EntityState.ENGAGED):
+            self._state_machine.transition_to(EntityState.HIDDEN)
 
     def _cleanup_voice_trajectory_player(self) -> None:
         if self._voice_trajectory_timeout.isActive():
@@ -912,55 +991,109 @@ class Director(QObject):
 
     def _resolve_voice_trajectory_path(self) -> Path | None:
         filename = self.VOICE_TRAJECTORY_FILE
-        candidates: list[Path] = []
-        seen: set[str] = set()
+        env_candidates: list[Path] = []
+        fallback_candidates: list[Path] = []
+        recorded_dirs: list[Path] = []
+        seen_paths: set[str] = set()
+        seen_dirs: set[str] = set()
 
-        def _append(path: Path) -> None:
+        def _key(path: Path) -> str:
             try:
-                key = str(path.resolve())
+                return str(path.resolve())
             except Exception:
-                key = str(path)
-            if key in seen:
+                return str(path)
+
+        def _append_candidate(path: Path, *, env: bool = False) -> None:
+            key = _key(path)
+            if key in seen_paths:
                 return
-            seen.add(key)
-            candidates.append(path)
+            seen_paths.add(key)
+            if env:
+                env_candidates.append(path)
+            else:
+                fallback_candidates.append(path)
+
+        def _append_recorded_dir(path: Path) -> None:
+            key = _key(path)
+            if key in seen_dirs:
+                return
+            seen_dirs.add(key)
+            recorded_dirs.append(path)
 
         env_path = os.environ.get("CYBERCOMPANION_TRAJECTORY_PATH", "").strip()
         if env_path:
             env_candidate = Path(env_path)
             if env_candidate.suffix.lower() == ".json":
-                _append(env_candidate)
+                _append_candidate(env_candidate, env=True)
             else:
-                _append(env_candidate / filename)
+                _append_candidate(env_candidate / filename, env=True)
+                _append_recorded_dir(env_candidate)
 
-        _append(self._base_dir / "recorded_paths" / filename)
-        _append(Path.cwd() / "recorded_paths" / filename)
-        _append(Path.cwd() / filename)
+        _append_recorded_dir(self._base_dir / "recorded_paths")
+        _append_candidate(self._base_dir / "recorded_paths" / filename)
+        _append_recorded_dir(Path.cwd() / "recorded_paths")
+        _append_candidate(Path.cwd() / "recorded_paths" / filename)
+        _append_candidate(Path.cwd() / filename)
 
         for parent in [self._base_dir, *self._base_dir.parents[:5]]:
-            _append(parent / "recorded_paths" / filename)
-            _append(parent / filename)
+            _append_recorded_dir(parent / "recorded_paths")
+            _append_candidate(parent / "recorded_paths" / filename)
+            _append_candidate(parent / filename)
 
         try:
             exe_parent = Path(sys.executable).resolve().parent
             for parent in [exe_parent, *exe_parent.parents[:5]]:
-                _append(parent / "recorded_paths" / filename)
-                _append(parent / filename)
+                _append_recorded_dir(parent / "recorded_paths")
+                _append_candidate(parent / "recorded_paths" / filename)
+                _append_candidate(parent / filename)
         except Exception:
             pass
 
         try:
-            _append(get_user_data_dir() / "recorded_paths" / filename)
+            user_recorded_dir = get_user_data_dir() / "recorded_paths"
+            _append_recorded_dir(user_recorded_dir)
+            _append_candidate(user_recorded_dir / filename)
         except Exception:
             pass
 
-        for candidate in candidates:
+        for candidate in env_candidates:
+            if candidate.exists() and candidate.is_file():
+                self.LOGGER.info("[SummonTrajectory] 使用环境变量指定轨迹文件: %s", candidate)
+                return candidate
+
+        latest_path: Path | None = None
+        latest_mtime = -1.0
+        latest_key = ""
+        for directory in recorded_dirs:
+            if not directory.exists() or not directory.is_dir():
+                continue
+            try:
+                files = directory.glob("trajectory_*.json")
+            except Exception:
+                continue
+            for path in files:
+                if not path.is_file():
+                    continue
+                try:
+                    mtime = float(path.stat().st_mtime)
+                except Exception:
+                    mtime = -1.0
+                key = _key(path)
+                if mtime > latest_mtime or (mtime == latest_mtime and key > latest_key):
+                    latest_mtime = mtime
+                    latest_key = key
+                    latest_path = path
+        if latest_path is not None:
+            self.LOGGER.info("[SummonTrajectory] 自动选择最新轨迹文件: %s", latest_path)
+            return latest_path
+
+        for candidate in fallback_candidates:
             if candidate.exists() and candidate.is_file():
                 self.LOGGER.info("[SummonTrajectory] 使用剧本轨迹文件: %s", candidate)
                 return candidate
         self.LOGGER.debug(
             "[SummonTrajectory] 剧本轨迹候选路径均不存在: %s",
-            " | ".join(str(item) for item in candidates[:12]),
+            " | ".join(str(item) for item in (env_candidates + fallback_candidates)[:12]),
         )
         return None
 
