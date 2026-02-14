@@ -213,6 +213,7 @@ class AudioManager(QObject):
         priority: AudioPriority = AudioPriority.NORMAL,
         cached_path: str | None = None,
         interrupt: bool = False,
+        voice_rate_override: str | None = None,
     ) -> None:
         """Speak one line with cache-first TTS and priority scheduling."""
         if not text.strip():
@@ -228,6 +229,7 @@ class AudioManager(QObject):
             audio_path=cached_path,
             priority=normalized_priority,
             interrupt=should_interrupt,
+            voice_rate_override=voice_rate_override,
         )
 
     def play_script(self, script: Script, *, priority: int | None = None, interrupt: bool = False) -> None:
@@ -244,6 +246,7 @@ class AudioManager(QObject):
             audio_path=script.audio_path,
             priority=normalized_priority,
             interrupt=should_interrupt,
+            voice_rate_override=None,
         )
 
     def interrupt(self, *, clear_pending_playback: bool = True, clear_pending_tts: bool = True) -> None:
@@ -278,8 +281,8 @@ class AudioManager(QObject):
         except Exception:
             pass
 
-    def _cache_path(self, text: str, voice: str) -> Path:
-        digest = hashlib.md5(f"edge:{voice}:{self._voice_rate}:{text}".encode("utf-8")).hexdigest()
+    def _cache_path(self, text: str, voice: str, voice_rate: str) -> Path:
+        digest = hashlib.md5(f"edge:{voice}:{voice_rate}:{text}".encode("utf-8")).hexdigest()
         return self._cache_dir / f"{digest}.mp3"
 
     @Slot(str, int, bool, int, int)
@@ -339,7 +342,15 @@ class AudioManager(QObject):
     def set_cache_enabled(self, enabled: bool) -> None:
         self._cache_enabled = bool(enabled)
 
-    def _enqueue_request(self, *, text: str, audio_path: str | None, priority: int, interrupt: bool) -> None:
+    def _enqueue_request(
+        self,
+        *,
+        text: str,
+        audio_path: str | None,
+        priority: int,
+        interrupt: bool,
+        voice_rate_override: str | None,
+    ) -> None:
         clean_text = text.strip()
         if not clean_text:
             return
@@ -356,7 +367,8 @@ class AudioManager(QObject):
                 self._audio_ready.emit(str(local_audio), priority, interrupt, token, order)
                 return
 
-        target = self._cache_path(text=clean_text, voice=self._voice)
+        effective_voice_rate = (voice_rate_override or "").strip() or self._voice_rate
+        target = self._cache_path(text=clean_text, voice=self._voice, voice_rate=effective_voice_rate)
         if self._cache_enabled and target.exists():
             self._audio_ready.emit(str(target), priority, interrupt, token, order)
             return
@@ -380,7 +392,7 @@ class AudioManager(QObject):
                 "order": task.order,
                 "target_path": str(target),
                 "voice": self._voice,
-                "voice_rate": self._voice_rate,
+                "voice_rate": effective_voice_rate,
                 "cache_enabled": self._cache_enabled,
             }
         )
@@ -402,4 +414,3 @@ class AudioManager(QObject):
         if numeric >= int(AudioPriority.LOW):
             return int(AudioPriority.LOW)
         return numeric
-

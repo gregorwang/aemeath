@@ -16,7 +16,7 @@ class GazeData:
     face_x: float = 0.0
     face_y: float = 0.0
     confidence: float = 0.0
-    emotion_label: str = "neutral"  # happy / neutral / angry / unknown
+    emotion_label: str = "neutral"  # happy / neutral / angry / sad / unknown
     emotion_score: float = 0.0
 
 
@@ -34,6 +34,7 @@ class GazeTracker(QThread):
     camera_state_changed = Signal(bool)  # True=start, False=stop
 
     MIN_DETECTION_CONFIDENCE = 0.5
+    USE_REFINE_LANDMARKS = False
     NOSE_TIP = 1
     LOGGER_NAME = "CyberCompanion"
 
@@ -85,7 +86,9 @@ class GazeTracker(QThread):
 
         face_mesh = mp.solutions.face_mesh.FaceMesh(
             max_num_faces=1,
-            refine_landmarks=True,
+            # Performance-first: iris refinement is unnecessary for the current
+            # gaze/expression features and costs extra compute.
+            refine_landmarks=self.USE_REFINE_LANDMARKS,
             min_detection_confidence=self.MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=0.5,
         )
@@ -158,6 +161,9 @@ class GazeTracker(QThread):
         mouth_open = abs(lower_lip.y - upper_lip.y)
         smile_ratio = mouth_width / face_width
         brow_drop = ((left_brow.y + right_brow.y) * 0.5) - ((left_eye.y + right_eye.y) * 0.5)
+        mouth_mid_y = (upper_lip.y + lower_lip.y) * 0.5
+        corner_drop = ((left_corner.y + right_corner.y) * 0.5) - mouth_mid_y
+        brow_raise = ((left_eye.y + right_eye.y) * 0.5) - ((left_brow.y + right_brow.y) * 0.5)
 
         if smile_ratio >= 0.38 and mouth_open >= 0.008:
             score = min(1.0, max(0.0, (smile_ratio - 0.38) / 0.16 + mouth_open / 0.03))
@@ -165,6 +171,11 @@ class GazeTracker(QThread):
         if brow_drop >= 0.038 and smile_ratio < 0.37:
             score = min(1.0, max(0.0, (brow_drop - 0.038) / 0.08))
             return "angry", float(score)
+        # Sadness heuristic: slight downturned mouth + raised brow posture and
+        # no obvious smile. Thresholds are conservative to reduce false alarms.
+        if corner_drop >= 0.010 and brow_raise >= 0.018 and smile_ratio < 0.34 and mouth_open < 0.02:
+            score = min(1.0, max(0.0, (corner_drop - 0.010) / 0.05 + (brow_raise - 0.018) / 0.05))
+            return "sad", float(score)
         neutral_score = 1.0 - min(1.0, abs(smile_ratio - 0.34) / 0.2)
         return "neutral", float(max(0.0, neutral_score))
 

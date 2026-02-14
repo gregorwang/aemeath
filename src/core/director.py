@@ -69,12 +69,20 @@ class ScriptedEntranceError(RuntimeError):
 class Director(QObject):
     """FSM-based behavior orchestrator with optional Phase 4 AI modules."""
 
-    VOICE_TRAJECTORY_FILE = "trajectory_1770800738_qt_animation.json"
+    VOICE_TRAJECTORY_FILE = "trajectory_1771029879_qt_animation.json"
     LOGGER = logging.getLogger("CyberCompanion")
+    SAD_COMFORT_TEXT = "别难过"
+    SAD_COMFORT_VOICE_RATE = "-40%"
+    SAD_COMFORT_COOLDOWN_SECONDS = 5 * 60
+    SAD_COMFORT_MIN_SCORE = 0.6
+    NO_FACE_TEST_TEXT = "我暂时看不到你，等你回来。"
+    NO_FACE_TEST_MIN_ABSENCE_SECONDS = 3.0
+    NO_FACE_TEST_COOLDOWN_SECONDS = 20.0
     EXPRESSION_STATE_MAP = {
         "happy": "state6",
         "neutral": "state1",
         "angry": "state4",
+        "sad": "state5",
     }
 
     def __init__(
@@ -119,8 +127,12 @@ class Director(QObject):
         self._silent_presence_mode = False
         self._current_ascii_template = ""
         self._stable_expression = "neutral"
-        self._expression_votes: dict[str, int] = {"happy": 0, "neutral": 0, "angry": 0}
+        self._expression_votes: dict[str, int] = {"happy": 0, "neutral": 0, "angry": 0, "sad": 0}
         self._last_expression_visual_at = 0.0
+        self._last_sad_comfort_at = 0.0
+        self._no_face_absent_since: float | None = None
+        self._last_no_face_test_at = 0.0
+        self._no_face_streak_triggered = False
 
         self._entropy = EntropyEngine()
         self._script_engine = ScriptEngine(asset_manager.idle_scripts, asset_manager.panic_scripts)
@@ -391,6 +403,7 @@ class Director(QObject):
         self._camera_enabled = bool(app_config.vision.camera_enabled) and self._camera_consent
         if not self._camera_enabled:
             self._stop_camera_tracking()
+            self._reset_no_face_tracker()
             self._latest_gaze_data = GazeData(face_detected=False)
         elif self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED):
             self._start_camera_tracking_if_needed()
@@ -444,6 +457,7 @@ class Director(QObject):
     def _enter_hidden(self) -> None:
         self._stop_auto_dismiss_timer()
         self._stop_camera_tracking()
+        self._reset_no_face_tracker()
         self._set_entity_autonomous(False)
         if hasattr(self._entity_window, "hide_now"):
             self._entity_window.hide_now()
@@ -528,7 +542,9 @@ class Director(QObject):
         if not isinstance(gaze_data, GazeData):
             return
         self._latest_gaze_data = gaze_data
+        self._maybe_trigger_no_face_test(gaze_data)
         self._track_expression_state(gaze_data)
+        self._maybe_trigger_sad_comfort(gaze_data)
         if not self._eye_tracking_enabled or self._ascii_renderer is None:
             return
         if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
@@ -542,9 +558,10 @@ class Director(QObject):
     def _on_camera_error(self, message: str) -> None:
         print(f"[Vision] {message}")
         self._camera_enabled = False
+        self._reset_no_face_tracker()
         self._latest_gaze_data = GazeData(face_detected=False)
         self._stable_expression = "neutral"
-        self._expression_votes = {"happy": 0, "neutral": 0, "angry": 0}
+        self._expression_votes = {"happy": 0, "neutral": 0, "angry": 0, "sad": 0}
 
     @Slot()
     def _on_audio_output_started(self) -> None:
@@ -791,6 +808,95 @@ class Director(QObject):
         self._last_expression_visual_at = now
         state_name = self.EXPRESSION_STATE_MAP.get(winner, "state1")
         self._set_entity_state(state_name, as_base=False)
+
+    def _maybe_trigger_sad_comfort(self, gaze_data: GazeData) -> None:
+        if not self._camera_enabled:
+            return
+        if not gaze_data.face_detected:
+            return
+        if (gaze_data.emotion_label or "").strip().lower() != "sad":
+            return
+        if float(gaze_data.emotion_score) < self.SAD_COMFORT_MIN_SCORE:
+            return
+        if self._stable_expression != "sad":
+            return
+        if self._voice_trajectory_playing:
+            return
+        if self._state_machine.current_state == EntityState.FLEEING:
+            return
+        now = time.monotonic()
+        if now - self._last_sad_comfort_at < self.SAD_COMFORT_COOLDOWN_SECONDS:
+            return
+        self._last_sad_comfort_at = now
+        QTimer.singleShot(0, self._trigger_sad_comfort)
+
+    def _trigger_sad_comfort(self) -> None:
+        self.LOGGER.info(
+            "[EmotionComfort] Triggered: expression=sad cooldown=%ds",
+            self.SAD_COMFORT_COOLDOWN_SECONDS,
+        )
+        try:
+            self._audio_manager.speak(
+                self.SAD_COMFORT_TEXT,
+                priority=AudioPriority.HIGH,
+                voice_rate_override=self.SAD_COMFORT_VOICE_RATE,
+            )
+        except Exception as exc:
+            self.LOGGER.warning("[EmotionComfort] TTS trigger failed: %s", exc)
+        try:
+            self._try_start_voice_scripted_entrance()
+        except Exception as exc:
+            self.LOGGER.warning("[EmotionComfort] Trajectory trigger failed: %s", exc)
+
+    def _reset_no_face_tracker(self) -> None:
+        self._no_face_absent_since = None
+        self._no_face_streak_triggered = False
+
+    def _maybe_trigger_no_face_test(self, gaze_data: GazeData) -> None:
+        if not self._camera_enabled:
+            self._reset_no_face_tracker()
+            return
+        if gaze_data.face_detected:
+            self._reset_no_face_tracker()
+            return
+        if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
+            self._reset_no_face_tracker()
+            return
+        if self._voice_trajectory_playing or self._state_machine.current_state == EntityState.FLEEING:
+            return
+        if self._no_face_streak_triggered:
+            return
+
+        now = time.monotonic()
+        if self._no_face_absent_since is None:
+            self._no_face_absent_since = now
+            return
+        if now - self._no_face_absent_since < self.NO_FACE_TEST_MIN_ABSENCE_SECONDS:
+            return
+        if now - self._last_no_face_test_at < self.NO_FACE_TEST_COOLDOWN_SECONDS:
+            return
+
+        self._last_no_face_test_at = now
+        self._no_face_streak_triggered = True
+        QTimer.singleShot(0, self._trigger_no_face_test)
+
+    def _trigger_no_face_test(self) -> None:
+        self.LOGGER.info(
+            "[NoFaceTest] Triggered: min_absence=%.1fs cooldown=%.1fs",
+            self.NO_FACE_TEST_MIN_ABSENCE_SECONDS,
+            self.NO_FACE_TEST_COOLDOWN_SECONDS,
+        )
+        try:
+            self._audio_manager.speak(
+                self.NO_FACE_TEST_TEXT,
+                priority=AudioPriority.HIGH,
+            )
+        except Exception as exc:
+            self.LOGGER.warning("[NoFaceTest] TTS trigger failed: %s", exc)
+        try:
+            self._try_start_voice_scripted_entrance()
+        except Exception as exc:
+            self.LOGGER.warning("[NoFaceTest] Trajectory trigger failed: %s", exc)
 
     @staticmethod
     def _build_fallback_ascii(text: str) -> str:

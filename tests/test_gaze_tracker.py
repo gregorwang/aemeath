@@ -67,7 +67,7 @@ class GazeTrackerTest(unittest.TestCase):
         self.assertGreaterEqual(gaze.face_y, -1.0)
         self.assertLessEqual(gaze.face_y, 1.0)
         self.assertGreater(gaze.confidence, 0.0)
-        self.assertIn(gaze.emotion_label, {"happy", "neutral", "angry"})
+        self.assertIn(gaze.emotion_label, {"happy", "neutral", "angry", "sad"})
 
 
 if __name__ == "__main__":
