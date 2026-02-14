@@ -47,6 +47,7 @@ class _SummonSubject:
         *,
         state: EntityState,
         scripted_result: bool = False,
+        scripted_error: Exception | None = None,
         transition_result: bool = True,
     ) -> None:
         self._state_machine = _StateMachineStub(state, transition_result=transition_result)
@@ -56,10 +57,13 @@ class _SummonSubject:
         self._silent_presence_mode = True
 
         self._scripted_result = scripted_result
+        self._scripted_error = scripted_error
         self.scripted_attempts = 0
 
     def _try_start_voice_scripted_entrance(self) -> bool:
         self.scripted_attempts += 1
+        if self._scripted_error is not None:
+            raise self._scripted_error
         return self._scripted_result
 
 
@@ -74,16 +78,16 @@ class DirectorSummonTest(unittest.TestCase):
         self.assertEqual(subject._state_machine.transitions, [])
         self.assertEqual(subject._gif_state_mapper.on_summoned_calls, 0)
 
-    def test_hidden_falls_back_to_engaged_transition(self) -> None:
-        subject = _SummonSubject(state=EntityState.HIDDEN, scripted_result=False)
+    def test_hidden_raises_when_scripted_entrance_fails(self) -> None:
+        subject = _SummonSubject(state=EntityState.HIDDEN, scripted_error=RuntimeError("boom"))
 
-        result = Director.summon_now(subject)
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            Director.summon_now(subject)
 
-        self.assertTrue(result)
         self.assertEqual(subject.scripted_attempts, 1)
-        self.assertEqual(subject._state_machine.transitions, [EntityState.ENGAGED])
-        self.assertEqual(subject._gif_state_mapper.on_summoned_calls, 1)
-        self.assertFalse(subject._silent_presence_mode)
+        self.assertEqual(subject._state_machine.transitions, [])
+        self.assertEqual(subject._gif_state_mapper.on_summoned_calls, 0)
+        self.assertTrue(subject._silent_presence_mode)
 
     def test_engaged_restarts_timer_without_scripted_entrance(self) -> None:
         subject = _SummonSubject(state=EntityState.ENGAGED, scripted_result=True)

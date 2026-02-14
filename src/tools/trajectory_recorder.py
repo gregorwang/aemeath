@@ -2,13 +2,14 @@
 import sys
 import json
 import time
+import argparse
 from pathlib import Path
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
 from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QFont
 
 class TrajectoryRecorder(QWidget):
-    def __init__(self):
+    def __init__(self, initial_state=1):
         super().__init__()
         # 设置窗口为全屏、无边框、置顶、透明背景
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -22,8 +23,24 @@ class TrajectoryRecorder(QWidget):
         self.start_time = 0
         self.is_recording = False
         
-        # 当前选中的状态（默认1）
-        self.current_state_id = 1
+        # 当前选中的状态（支持自定义）
+        self.current_state_id = max(0, min(9, initial_state))  # 限制在 0-9 范围内
+        
+        # 自定义 GIF 映射表（可扩展）
+        # 按键 0-9 对应的 GIF 文件名（相对于 characters/ 目录）
+        self.gif_key_mapping = {
+            1: "state1.gif",
+            2: "state2.gif",
+            3: "state3.gif",
+            4: "state4.gif",
+            5: "state5.gif",
+            6: "state6.gif",
+            7: "state7.gif",
+            8: "aemeath.gif",  # 按 8 对应到 aemeath.gif
+            9: "state1.gif",   # 可自定义
+            0: "state1.gif",   # 可自定义
+        }
+        self.current_gif_name = self.gif_key_mapping.get(self.current_state_id, "state1.gif")
         
         # 视觉显示
         self.display_path = QPainterPath()
@@ -32,7 +49,7 @@ class TrajectoryRecorder(QWidget):
         print("【轨迹录制器已启动】")
         print("操作指南：")
         print("1. 按住鼠标左键：开始绘制轨迹")
-        print("2. 绘制过程中按数字键 1-7：切换角色动画状态（State 1-7）")
+        print("2. 绘制过程中按数字键 0-9：切换角色动画 GIF (1-7:state, 8:aemeath.gif)")
         print("3. 松开鼠标左键：结束当前绘制（可再次按住进行多段录制，形成‘断点’效果）")
         print("   -> 提示：若需从左边/右边出现，可先让鼠标移入边缘，然后开始绘制。")
         print("4. 按 'S' 键：保存完整轨迹到文件")
@@ -52,7 +69,7 @@ class TrajectoryRecorder(QWidget):
             else:
                 # 如果已经有路径，说明是“断点”继续录制
                 # 视觉上，我们把上一段的终点连到这一段的起点，形成一条路径线
-                self.display_path.lineTo(event.pos())
+                self.display_path.moveTo(event.pos())
             
             # 记录当前点
             self._record_point(event.pos())
@@ -78,19 +95,21 @@ class TrajectoryRecorder(QWidget):
     def keyPressEvent(self, event):
         key = event.key()
         
-        # 监听数字键 1-7
-        if Qt.Key_1 <= key <= Qt.Key_7:
+        # 监听数字键 0-9
+        if Qt.Key_0 <= key <= Qt.Key_9:
             num = key - Qt.Key_0
-            self.current_state_id = num
-            print(f"-> 切换到 State {num}")
             
-            if self.is_recording:
-                # 如果正在录制，记录这个切换点
-                # 我们在路径数据里，下一个点的 's' 字段会变成新的 state_id
-                # 为了视觉反馈，我们记下来画个圈
-                current_pos = self.mapFromGlobal(self.cursor().pos())
-                self.state_change_points.append((current_pos, num))
-            self.update()
+            # 检查映射表中是否有这个按键
+            if num in self.gif_key_mapping:
+                self.current_state_id = num
+                self.current_gif_name = self.gif_key_mapping[num]
+                print(f"-> 切换到按键 {num}: {self.current_gif_name}")
+                
+                if self.is_recording:
+                    # 如果正在录制，记录这个切换点
+                    current_pos = self.mapFromGlobal(self.cursor().pos())
+                    self.state_change_points.append((current_pos, num))
+                self.update()
 
         elif key == Qt.Key_S:
             self.save_trajectory()
@@ -156,7 +175,7 @@ class TrajectoryRecorder(QWidget):
         # 在左上角显示当前状态提示
         painter.setPen(QColor(255, 255, 255))
         painter.setFont(QFont("Microsoft YaHei", 14))
-        status_text = f"当前预设动作: State {self.current_state_id} (按 1-7 切换)"
+        status_text = f"当前 GIF: {self.current_gif_name} (按 0-9 切换)"
         if self.is_recording:
             status_text += " [录制中...]"
         else:
@@ -191,7 +210,34 @@ class TrajectoryRecorder(QWidget):
             print(f"❌ 保存失败: {e}")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="轨迹录制器 - 录制角色动画轨迹",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用示例:
+  python trajectory_recorder.py              # 默认从按键 1 (state1.gif) 开始
+  python trajectory_recorder.py --state 8    # 从按键 8 (aemeath.gif) 开始录制
+  python trajectory_recorder.py -s 3         # 从按键 3 (state3.gif) 开始录制
+  
+按键映射:
+  1-7: state1.gif ~ state7.gif
+  8: aemeath.gif
+  9,0: 自定义 (在代码中修改)
+        """
+    )
+    parser.add_argument(
+        '--state', '-s',
+        type=int,
+        default=1,
+        choices=range(0, 10),
+        metavar='0-9',
+        help='初始 GIF 按键 (0-9)，默认为 1 (state1.gif), 8 对应 aemeath.gif'
+    )
+    
+    args = parser.parse_args()
+    
     app = QApplication(sys.argv)
-    recorder = TrajectoryRecorder()
+    recorder = TrajectoryRecorder(initial_state=args.state)
     recorder.show()
     sys.exit(app.exec())
+

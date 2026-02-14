@@ -22,7 +22,7 @@ try:
     from core.character_loader import CharacterLoader
     from core.command_matcher import VoiceCommandMatcher
     from core.config_manager import ConfigManager
-    from core.director import Director
+    from core.director import Director, ScriptedEntranceError
     from core.gif_state_mapper import GifStateMapper
     from core.idle_monitor import IdleMonitor
     from core.logger import setup_logger
@@ -46,7 +46,7 @@ except ModuleNotFoundError:
     from .core.character_loader import CharacterLoader
     from .core.command_matcher import VoiceCommandMatcher
     from .core.config_manager import ConfigManager
-    from .core.director import Director
+    from .core.director import Director, ScriptedEntranceError
     from .core.gif_state_mapper import GifStateMapper
     from .core.idle_monitor import IdleMonitor
     from .core.logger import setup_logger
@@ -263,6 +263,18 @@ def main() -> int:
         if tray_manager is not None:
             tray_manager.show_message(title, message, timeout_ms=timeout_ms)
 
+    def _summon_now_or_notify(source: str) -> bool:
+        try:
+            return bool(director.summon_now())
+        except ScriptedEntranceError as exc:
+            logger.error("[Summon] failed source=%s error=%s", source, exc)
+            _notify("召唤失败", str(exc), timeout_ms=4200)
+            return False
+        except Exception as exc:
+            logger.exception("[Summon] unexpected failure source=%s: %s", source, exc)
+            _notify("召唤失败", f"{exc}", timeout_ms=4200)
+            return False
+
     def _resolve_asr_runtime() -> tuple[str, str]:
         asr_key = (
             config.audio.asr_api_key
@@ -297,10 +309,10 @@ def main() -> int:
             cleaned,
         )
         if match.action == "summon":
-            director.summon_now()
+            _summon_now_or_notify(f"voice:{source}")
         elif match.action == "screen_commentary":
-            director.summon_now()
-            QTimer.singleShot(700, director.request_screen_commentary)
+            if _summon_now_or_notify(f"voice:{source}"):
+                QTimer.singleShot(700, director.request_screen_commentary)
         elif match.action == "hide":
             if getattr(director.current_state, "name", "") != "HIDDEN":
                 director.toggle_visibility()
@@ -324,7 +336,7 @@ def main() -> int:
 
         with _ptt_lock:
             if _ptt_busy:
-                _notify("语音转写", "正在转写中，请稍候。", timeout_ms=1400)
+                logger.debug("[PushToTalk] 忽略重复触发：当前仍在转写中。")
                 return
             _ptt_busy = True
 
@@ -418,7 +430,7 @@ def main() -> int:
             logger.info("Wake phrase detected: %s", heard)
             matched = _execute_voice_command(heard, source="wakeup")
             if not matched:
-                director.summon_now()
+                _summon_now_or_notify("wakeup")
             lowered = (heard or "").strip().lower()
             if (not matched) and any(keyword in lowered for keyword in ("看屏幕", "看看屏幕", "你在看什么", "屏幕上", "screen")):
                 logger.info("[VoiceWakeup] Wake phrase includes screen intent, auto request commentary")
@@ -514,7 +526,7 @@ def main() -> int:
         icon_path = str((base_dir / "assets" / "icon.ico").resolve()) if (base_dir / "assets" / "icon.ico").exists() else None
         tray_manager = SystemTrayManager(app, icon_path=icon_path)
         tray_manager.update_characters(manifests)
-        tray_manager.summon_requested.connect(director.summon_now)
+        tray_manager.summon_requested.connect(lambda: _summon_now_or_notify("tray"))
         tray_manager.commentary_requested.connect(director.request_screen_commentary)
         tray_manager.toggle_requested.connect(director.toggle_visibility)
         tray_manager.status_requested.connect(lambda: tray_manager.show_message("状态", director.get_status_summary()))
@@ -563,7 +575,7 @@ def main() -> int:
         if chosen == toggle_action:
             director.toggle_visibility()
         elif chosen == summon_action:
-            director.summon_now()
+            _summon_now_or_notify("context_menu")
         elif chosen == commentary_action:
             director.request_screen_commentary()
         elif chosen == open_logs_action:
@@ -596,6 +608,7 @@ def main() -> int:
     HOTKEY_ID_PUSH_TO_TALK = 2
     MOD_CTRL_SHIFT = 0x0002 | 0x0004  # MOD_CONTROL | MOD_SHIFT
     MOD_NONE = 0x0000
+    MOD_NOREPEAT = 0x4000
     VK_S = 0x53
     VK_B = 0x42
     _hotkey_registered_ids: list[int] = []
@@ -637,7 +650,7 @@ def main() -> int:
                     hotkey_id = int(msg.wParam)
                     if hotkey_id == HOTKEY_ID_SUMMON:
                         logger.info("[Hotkey] Ctrl+Shift+S pressed")
-                        QTimer.singleShot(0, director.summon_now)
+                        QTimer.singleShot(0, lambda: _summon_now_or_notify("hotkey"))
                         return True, 0
                     if hotkey_id == HOTKEY_ID_PUSH_TO_TALK:
                         logger.info("[Hotkey] B pressed")
@@ -656,8 +669,11 @@ def main() -> int:
                 _hotkey_registered_ids.append(HOTKEY_ID_SUMMON)
             else:
                 logger.warning("[Hotkey] Failed to register Ctrl+Shift+S (may be in use by another app)")
-            if user32.RegisterHotKey(None, HOTKEY_ID_PUSH_TO_TALK, MOD_NONE, VK_B):
+            if user32.RegisterHotKey(None, HOTKEY_ID_PUSH_TO_TALK, MOD_NONE | MOD_NOREPEAT, VK_B):
                 _hotkey_registered_ids.append(HOTKEY_ID_PUSH_TO_TALK)
+            elif user32.RegisterHotKey(None, HOTKEY_ID_PUSH_TO_TALK, MOD_NONE, VK_B):
+                _hotkey_registered_ids.append(HOTKEY_ID_PUSH_TO_TALK)
+                logger.info("[Hotkey] B registered without MOD_NOREPEAT fallback")
             else:
                 logger.warning("[Hotkey] Failed to register B for push-to-talk (may be in use by another app)")
             if _hotkey_registered_ids:
