@@ -85,6 +85,23 @@ class ScreenCommentaryConfig:
 
 
 @dataclass(slots=True)
+class IdleInvasionConfig:
+    """Configuration for the idle invasion feature."""
+    enabled: bool = True
+    start_delay_ms: int = 180_000
+    initial_spawn_interval_ms: int = 10_000
+    min_spawn_interval_ms: int = 2_000
+    max_invaders: int = 40
+    scale: float = 0.7
+    cell_padding: int = 20
+    participating_gifs: tuple[str, ...] = (
+        "state1.gif", "state2.gif", "state5.gif",
+        "state6.gif", "state7.gif", "aemeath.gif",
+    )
+    retreat_style: str = "scatter"
+
+
+@dataclass(slots=True)
 class AppConfig:
     version: str = "1.0.0"
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
@@ -95,6 +112,7 @@ class AppConfig:
     wakeup: WakeupConfig = field(default_factory=WakeupConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     screen_commentary: ScreenCommentaryConfig = field(default_factory=ScreenCommentaryConfig)
+    idle_invasion: IdleInvasionConfig = field(default_factory=IdleInvasionConfig)
 
 
 class ConfigManager:
@@ -121,6 +139,7 @@ class ConfigManager:
         wakeup = self._build_wakeup(raw.get("wakeup"))
         llm = self._build_llm(raw.get("llm"))
         screen_commentary = self._build_screen_commentary(raw.get("screen_commentary"))
+        idle_invasion = self._build_idle_invasion(raw.get("idle_invasion"))
         version = str(raw.get("version", "1.0.0"))
         return AppConfig(
             version=version,
@@ -132,6 +151,7 @@ class ConfigManager:
             wakeup=wakeup,
             llm=llm,
             screen_commentary=screen_commentary,
+            idle_invasion=idle_invasion,
         )
 
     def save(self, config: AppConfig) -> bool:
@@ -219,6 +239,17 @@ class ConfigManager:
                 "preamble_text": str(config.screen_commentary.preamble_text),
                 "auto_enabled": bool(config.screen_commentary.auto_enabled),
                 "auto_interval_minutes": int(config.screen_commentary.auto_interval_minutes),
+            },
+            "idle_invasion": {
+                "enabled": bool(config.idle_invasion.enabled),
+                "start_delay_ms": int(config.idle_invasion.start_delay_ms),
+                "initial_spawn_interval_ms": int(config.idle_invasion.initial_spawn_interval_ms),
+                "min_spawn_interval_ms": int(config.idle_invasion.min_spawn_interval_ms),
+                "max_invaders": int(config.idle_invasion.max_invaders),
+                "scale": float(config.idle_invasion.scale),
+                "cell_padding": int(config.idle_invasion.cell_padding),
+                "participating_gifs": [str(g) for g in config.idle_invasion.participating_gifs],
+                "retreat_style": str(config.idle_invasion.retreat_style),
             },
         }
 
@@ -380,4 +411,28 @@ class ConfigManager:
             ),
             auto_enabled=bool(payload.get("auto_enabled", False)),
             auto_interval_minutes=max(1, min(1440, int(payload.get("auto_interval_minutes", 60)))),
+        )
+
+    @staticmethod
+    def _build_idle_invasion(payload: Any) -> IdleInvasionConfig:
+        if not isinstance(payload, dict):
+            return IdleInvasionConfig()
+        raw_gifs = payload.get("participating_gifs", None)
+        if isinstance(raw_gifs, list):
+            gifs = tuple(str(g).strip() for g in raw_gifs if str(g).strip())
+        else:
+            gifs = IdleInvasionConfig().participating_gifs
+        retreat = str(payload.get("retreat_style", "scatter")).lower()
+        if retreat not in {"scatter", "instant", "ripple"}:
+            retreat = "scatter"
+        return IdleInvasionConfig(
+            enabled=bool(payload.get("enabled", True)),
+            start_delay_ms=max(5000, int(payload.get("start_delay_ms", 180_000))),
+            initial_spawn_interval_ms=max(1000, int(payload.get("initial_spawn_interval_ms", 10_000))),
+            min_spawn_interval_ms=max(500, int(payload.get("min_spawn_interval_ms", 2_000))),
+            max_invaders=max(1, min(100, int(payload.get("max_invaders", 40)))),
+            scale=max(0.2, min(2.0, float(payload.get("scale", 0.7)))),
+            cell_padding=max(0, min(100, int(payload.get("cell_padding", 20)))),
+            participating_gifs=gifs,
+            retreat_style=retreat,
         )

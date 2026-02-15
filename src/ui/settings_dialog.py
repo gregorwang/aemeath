@@ -86,7 +86,8 @@ class SettingsDialog(QDialog):
     def _create_general_tab(self) -> QWidget:
         """Create and return the General settings tab."""
         general_tab = QWidget(self)
-        general_form = QFormLayout(general_tab)
+        general_layout = QVBoxLayout(general_tab)
+        general_form = QFormLayout()
         self.position_combo = QComboBox(self)
         self.position_combo.addItems(["auto", "left", "right"])
         self.fullscreen_pause_checkbox = QCheckBox("全屏应用时暂停", self)
@@ -110,6 +111,56 @@ class SettingsDialog(QDialog):
         general_form.addRow("", self.debug_mode_checkbox)
         general_form.addRow("", self.offline_mode_checkbox)
         general_form.addRow("日志文件", self.log_path_edit)
+        general_layout.addLayout(general_form)
+
+        invasion_box = QGroupBox("空闲入侵 (Idle Invasion)", general_tab)
+        invasion_form = QFormLayout(invasion_box)
+        self.invasion_enabled_checkbox = QCheckBox("启用空闲入侵", self)
+        self.invasion_start_delay_spin = QSpinBox(self)
+        self.invasion_start_delay_spin.setRange(5, 3600)
+        self.invasion_start_delay_spin.setSuffix(" 秒")
+        self.invasion_initial_interval_spin = QSpinBox(self)
+        self.invasion_initial_interval_spin.setRange(1, 120)
+        self.invasion_initial_interval_spin.setSuffix(" 秒")
+        self.invasion_min_interval_spin = QSpinBox(self)
+        self.invasion_min_interval_spin.setRange(1, 60)
+        self.invasion_min_interval_spin.setSuffix(" 秒")
+        self.invasion_max_invaders_spin = QSpinBox(self)
+        self.invasion_max_invaders_spin.setRange(1, 100)
+        self.invasion_scale_spin = QDoubleSpinBox(self)
+        self.invasion_scale_spin.setRange(0.2, 2.0)
+        self.invasion_scale_spin.setSingleStep(0.05)
+        self.invasion_scale_spin.setDecimals(2)
+        self.invasion_cell_padding_spin = QSpinBox(self)
+        self.invasion_cell_padding_spin.setRange(0, 100)
+        self.invasion_cell_padding_spin.setSuffix(" px")
+        self.invasion_retreat_style_combo = QComboBox(self)
+        self.invasion_retreat_style_combo.addItem("scatter（四散奔逃）", "scatter")
+        self.invasion_retreat_style_combo.addItem("ripple（波纹退场）", "ripple")
+        self.invasion_retreat_style_combo.addItem("instant（瞬间消失）", "instant")
+        self.invasion_gifs_edit = QLineEdit(self)
+        self.invasion_gifs_edit.setPlaceholderText("例如 state1.gif, state2.gif, aemeath.gif")
+        invasion_form.addRow("", self.invasion_enabled_checkbox)
+        invasion_form.addRow("开始入侵延迟", self.invasion_start_delay_spin)
+        invasion_form.addRow("初始生成间隔", self.invasion_initial_interval_spin)
+        invasion_form.addRow("最小生成间隔", self.invasion_min_interval_spin)
+        invasion_form.addRow("最大入侵数量", self.invasion_max_invaders_spin)
+        invasion_form.addRow("GIF 缩放比例", self.invasion_scale_spin)
+        invasion_form.addRow("网格额外间距", self.invasion_cell_padding_spin)
+        invasion_form.addRow("退场风格", self.invasion_retreat_style_combo)
+        invasion_form.addRow("参与入侵 GIF", self.invasion_gifs_edit)
+        general_layout.addWidget(invasion_box)
+        general_layout.addStretch(1)
+        self._idle_invasion_controls = [
+            self.invasion_start_delay_spin,
+            self.invasion_initial_interval_spin,
+            self.invasion_min_interval_spin,
+            self.invasion_max_invaders_spin,
+            self.invasion_scale_spin,
+            self.invasion_cell_padding_spin,
+            self.invasion_retreat_style_combo,
+            self.invasion_gifs_edit,
+        ]
         return general_tab
 
     def _create_ai_tab(self) -> QWidget:
@@ -293,6 +344,15 @@ class SettingsDialog(QDialog):
         self.idle_threshold_spin.setToolTip("用户无输入达到该秒数后，触发空闲互动。")
         self.auto_dismiss_spin.setToolTip("角色出现后若无进一步互动，多少秒后自动隐藏。")
         self.offline_mode_checkbox.setToolTip("开启后禁用 AI 页全部远程能力，适合纯本地运行或排障。")
+        self.invasion_enabled_checkbox.setToolTip("开启后，空闲达到阈值会触发小人入侵。")
+        self.invasion_start_delay_spin.setToolTip("空闲多久后开始入侵。")
+        self.invasion_initial_interval_spin.setToolTip("刚开始入侵时的生成节奏（秒）。")
+        self.invasion_min_interval_spin.setToolTip("加速后最低生成间隔（秒）。")
+        self.invasion_max_invaders_spin.setToolTip("屏幕上同时存在的小人上限。")
+        self.invasion_scale_spin.setToolTip("入侵小人的 GIF 缩放比例。")
+        self.invasion_cell_padding_spin.setToolTip("网格格子额外间距（像素），用于防重叠。")
+        self.invasion_retreat_style_combo.setToolTip("用户恢复操作时的退场动画风格。")
+        self.invasion_gifs_edit.setToolTip("参与入侵的 GIF 文件名，英文逗号分隔。")
         self.provider_combo.setToolTip(
             "LLM 提供商选择:\n"
             "- none: 不调用远程模型\n"
@@ -343,6 +403,7 @@ class SettingsDialog(QDialog):
         self.camera_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
         self.wakeup_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
         self.mic_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
+        self.invasion_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
         self._apply_control_dependencies()
 
     def _apply_control_dependencies(self, *_: object) -> None:
@@ -363,6 +424,10 @@ class SettingsDialog(QDialog):
         wakeup_enabled = mic_enabled and self.wakeup_enabled_checkbox.isChecked()
         self.wakeup_phrases_edit.setEnabled(wakeup_enabled)
         self.wakeup_language_edit.setEnabled(wakeup_enabled)
+
+        invasion_enabled = self.invasion_enabled_checkbox.isChecked()
+        for control in self._idle_invasion_controls:
+            control.setEnabled(invasion_enabled)
 
     def _validate_url(self, line_edit: QLineEdit, text: str) -> None:
         """Validate URL text and show a red border when invalid."""
@@ -449,6 +514,15 @@ class SettingsDialog(QDialog):
         self.audio_output_reactive_checkbox.setChecked(bool(config.behavior.audio_output_reactive))
         self.debug_mode_checkbox.setChecked(bool(config.behavior.debug_mode))
         self.offline_mode_checkbox.setChecked(bool(config.behavior.offline_mode))
+        self.invasion_enabled_checkbox.setChecked(bool(config.idle_invasion.enabled))
+        self.invasion_start_delay_spin.setValue(max(5, int(config.idle_invasion.start_delay_ms / 1000)))
+        self.invasion_initial_interval_spin.setValue(max(1, int(config.idle_invasion.initial_spawn_interval_ms / 1000)))
+        self.invasion_min_interval_spin.setValue(max(1, int(config.idle_invasion.min_spawn_interval_ms / 1000)))
+        self.invasion_max_invaders_spin.setValue(max(1, min(100, int(config.idle_invasion.max_invaders))))
+        self.invasion_scale_spin.setValue(float(config.idle_invasion.scale))
+        self.invasion_cell_padding_spin.setValue(max(0, min(100, int(config.idle_invasion.cell_padding))))
+        self._set_combo_data(self.invasion_retreat_style_combo, config.idle_invasion.retreat_style, "scatter")
+        self.invasion_gifs_edit.setText(", ".join(config.idle_invasion.participating_gifs))
 
         self._set_combo_text(self.provider_combo, config.llm.provider, "xai")
         self._set_combo_text(self.model_combo, config.llm.model, "grok-4-fast-reasoning")
@@ -543,6 +617,24 @@ class SettingsDialog(QDialog):
             phrases=phrases,
             language=self.wakeup_language_edit.text().strip() or "zh-CN",
         )
+        raw_invasion_gifs = self.invasion_gifs_edit.text().strip()
+        invasion_gifs = (
+            tuple(part.strip() for part in raw_invasion_gifs.split(",") if part.strip())
+            if raw_invasion_gifs
+            else self._source.idle_invasion.participating_gifs
+        )
+        idle_invasion = replace(
+            self._source.idle_invasion,
+            enabled=self.invasion_enabled_checkbox.isChecked(),
+            start_delay_ms=max(5000, int(self.invasion_start_delay_spin.value()) * 1000),
+            initial_spawn_interval_ms=max(1000, int(self.invasion_initial_interval_spin.value()) * 1000),
+            min_spawn_interval_ms=max(500, int(self.invasion_min_interval_spin.value()) * 1000),
+            max_invaders=max(1, int(self.invasion_max_invaders_spin.value())),
+            scale=float(self.invasion_scale_spin.value()),
+            cell_padding=max(0, int(self.invasion_cell_padding_spin.value())),
+            participating_gifs=invasion_gifs,
+            retreat_style=str(self.invasion_retreat_style_combo.currentData() or "scatter"),
+        )
 
         return AppConfig(
             version=self._source.version,
@@ -564,6 +656,7 @@ class SettingsDialog(QDialog):
                 auto_enabled=self.screen_auto_commentary_checkbox.isChecked(),
                 auto_interval_minutes=int(self.screen_auto_interval_spin.value()),
             ),
+            idle_invasion=idle_invasion,
         )
 
     @staticmethod

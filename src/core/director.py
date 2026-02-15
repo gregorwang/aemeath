@@ -30,6 +30,11 @@ from .script_engine import ScriptEngine
 from .state_machine import EntityState, StateMachine
 
 try:
+    from .idle_invasion import IdleInvasionController
+except ModuleNotFoundError:
+    IdleInvasionController = object  # type: ignore
+
+try:
     from ai.gaze_tracker import GazeData, GazeTracker
     from ai.screen_commentator import ScreenCommentator
 except ModuleNotFoundError:
@@ -99,6 +104,7 @@ class Director(QObject):
         screen_commentator: ScreenCommentator | None = None,
         gif_state_mapper: GifStateMapper | None = None,
         audio_output_monitor: AudioOutputMonitor | None = None,
+        idle_invasion_controller: IdleInvasionController | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -142,6 +148,7 @@ class Director(QObject):
         self._screen_commentator = screen_commentator
         self._gif_state_mapper = gif_state_mapper
         self._audio_output_monitor = audio_output_monitor
+        self._idle_invasion_controller = idle_invasion_controller
         self._auto_screen_commentary_enabled = bool(
             getattr(getattr(app_config, "screen_commentary", None), "auto_enabled", False)
         )
@@ -424,6 +431,9 @@ class Director(QObject):
         self._arm_idle_threshold_with_jitter()
         self._sync_auto_screen_commentary_timer()
 
+        if self._idle_invasion_controller is not None:
+            self._idle_invasion_controller.apply_config(app_config.idle_invasion)
+
     def get_status_summary(self) -> str:
         offline_mode = bool(getattr(getattr(self._config, "behavior", None), "offline_mode", False))
         wakeup_enabled = bool(getattr(getattr(self._config, "wakeup", None), "enabled", False))
@@ -452,6 +462,8 @@ class Director(QObject):
             self._audio_output_monitor.stop()
         if self._gif_state_mapper:
             self._gif_state_mapper.shutdown()
+        if self._idle_invasion_controller is not None:
+            self._idle_invasion_controller.shutdown()
         self._set_entity_autonomous(False)
 
     def _enter_hidden(self) -> None:

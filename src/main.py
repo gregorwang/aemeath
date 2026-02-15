@@ -24,6 +24,7 @@ try:
     from core.config_manager import ConfigManager
     from core.director import Director, ScriptedEntranceError
     from core.gif_state_mapper import GifStateMapper
+    from core.idle_invasion import IdleInvasionController
     from core.idle_monitor import IdleMonitor
     from core.logger import setup_logger
     from core.mood_system import MoodSystem
@@ -48,6 +49,7 @@ except ModuleNotFoundError:
     from .core.config_manager import ConfigManager
     from .core.director import Director, ScriptedEntranceError
     from .core.gif_state_mapper import GifStateMapper
+    from .core.idle_invasion import IdleInvasionController
     from .core.idle_monitor import IdleMonitor
     from .core.logger import setup_logger
     from .core.mood_system import MoodSystem
@@ -229,6 +231,12 @@ def main() -> int:
         poll_interval_ms=200,
         threshold=0.01,
     )
+    
+    # --- Idle Invasion ---
+    idle_invasion_controller = IdleInvasionController(
+        characters_dir=characters_root,
+        config=config.idle_invasion,
+    )
 
     director = Director(
         entity_window=entity_window,
@@ -243,9 +251,11 @@ def main() -> int:
         screen_commentator=screen_commentator,
         gif_state_mapper=gif_state_mapper,
         audio_output_monitor=audio_output_monitor,
+        idle_invasion_controller=idle_invasion_controller,
     )
     idle_monitor = IdleMonitor(threshold_ms=config.trigger.idle_threshold_seconds * 1000)
     director.bind_idle_monitor(idle_monitor)
+    idle_invasion_controller.bind_idle_monitor(idle_monitor)
     idle_monitor.start()
 
     tray_manager: SystemTrayManager | None = None
