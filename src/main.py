@@ -71,7 +71,7 @@ def _build_llm_provider(config) -> LLMProvider:
     provider = (config.llm.provider or "none").lower()
     if provider in {"openai", "xai", "deepseek"}:
         candidate = OpenAIProvider(
-            model=config.llm.model or "grok-4-fast-reasoning",
+            model=config.llm.model or "grok-4-latest",
             api_key=(
                 config.llm.api_key
                 or os.environ.get("OPENAI_API_KEY", "")
@@ -133,6 +133,69 @@ def _migrate_legacy_asr_defaults(config) -> bool:
     return changed
 
 
+def _migrate_legacy_llm_defaults(config) -> bool:
+    provider = str(getattr(config.llm, "provider", "") or "").strip().lower()
+    model = str(getattr(config.llm, "model", "") or "").strip().lower()
+    base_url = str(getattr(config.llm, "base_url", "") or "").strip().lower().rstrip("/")
+    changed = False
+
+    if provider == "xai":
+        if model in {"", "grok-4-fast-reasoning", "grok-4-fast"}:
+            config.llm.model = "grok-4-latest"
+            changed = True
+        if base_url in {"", "https://api.x.ai/v1"}:
+            config.llm.base_url = "https://api.x.ai"
+            changed = True
+
+    return changed
+
+
+def _resolve_asr_runtime(config) -> tuple[str, str]:
+    asr_key = (
+        config.audio.asr_api_key
+        or config.llm.api_key
+        or os.environ.get("ZHIPU_API_KEY", "")
+        or os.environ.get("OPENAI_API_KEY", "")
+        or os.environ.get("POLOAI_API_KEY", "")
+        or os.environ.get("XAI_API_KEY", "")
+    )
+    if (config.audio.asr_provider or "").lower() == "zhipu_asr":
+        default_base = "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
+    else:
+        default_base = config.llm.base_url or "https://api.x.ai"
+    asr_base_url = (config.audio.asr_base_url or "").strip() or default_base
+    return asr_key, asr_base_url
+
+
+def _is_truthy_env(name: str) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _apply_dev_fast_idle_profile(config) -> bool:
+    """Apply runtime-only idle/invasion acceleration for local dev runs."""
+    if not _is_truthy_env("AEMEATH_DEV_FAST_IDLE"):
+        return False
+
+    changed = False
+    if int(config.trigger.idle_threshold_seconds) > 60:
+        config.trigger.idle_threshold_seconds = 60
+        changed = True
+    if not bool(config.idle_invasion.enabled):
+        config.idle_invasion.enabled = True
+        changed = True
+    if int(config.idle_invasion.start_delay_ms) > 60_000:
+        config.idle_invasion.start_delay_ms = 60_000
+        changed = True
+    if int(config.idle_invasion.initial_spawn_interval_ms) > 2_000:
+        config.idle_invasion.initial_spawn_interval_ms = 2_000
+        changed = True
+    if int(config.idle_invasion.min_spawn_interval_ms) > 500:
+        config.idle_invasion.min_spawn_interval_ms = 500
+        changed = True
+    return changed
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     splash = None
@@ -149,8 +212,9 @@ def main() -> int:
     config_path = resolve_config_path()
     config_manager = ConfigManager(config_path)
     config = config_manager.load()
-    if _migrate_legacy_asr_defaults(config):
+    if _migrate_legacy_asr_defaults(config) or _migrate_legacy_llm_defaults(config):
         config_manager.save(config)
+    _apply_dev_fast_idle_profile(config)
     if config.llm.api_key:
         os.environ["OPENAI_API_KEY"] = config.llm.api_key
         os.environ["POLOAI_API_KEY"] = config.llm.api_key
@@ -162,6 +226,14 @@ def main() -> int:
     logger = setup_logger(get_log_dir(), debug=config.behavior.debug_mode)
     log_file = get_log_file()
     logger.info("Application starting. base_dir=%s config=%s", base_dir, config_path)
+    if _is_truthy_env("AEMEATH_DEV_FAST_IDLE"):
+        logger.info(
+            "[DevMode] FAST_IDLE enabled: idle_threshold=%ss start_delay=%sms initial_interval=%sms min_interval=%sms",
+            config.trigger.idle_threshold_seconds,
+            config.idle_invasion.start_delay_ms,
+            config.idle_invasion.initial_spawn_interval_ms,
+            config.idle_invasion.min_spawn_interval_ms,
+        )
 
     if _ensure_camera_consent(config):
         config_manager.save(config)
@@ -285,21 +357,19 @@ def main() -> int:
             _notify("召唤失败", f"{exc}", timeout_ms=4200)
             return False
 
-    def _resolve_asr_runtime() -> tuple[str, str]:
-        asr_key = (
-            config.audio.asr_api_key
-            or config.llm.api_key
-            or os.environ.get("ZHIPU_API_KEY", "")
-            or os.environ.get("OPENAI_API_KEY", "")
-            or os.environ.get("POLOAI_API_KEY", "")
-            or os.environ.get("XAI_API_KEY", "")
-        )
-        if (config.audio.asr_provider or "").lower() == "zhipu_asr":
-            default_base = "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
+    def _trigger_idle_invasion_debug(source: str) -> None:
+        try:
+            started = bool(idle_invasion_controller.trigger_debug_invasion())
+        except Exception as exc:
+            logger.exception("[IdleInvasion] debug trigger failed source=%s: %s", source, exc)
+            _notify("空闲入侵调试失败", f"{exc}", timeout_ms=4200)
+            return
+        if started:
+            logger.info("[IdleInvasion] debug trigger success source=%s", source)
+            _notify("空闲入侵调试", "已触发空闲入侵（无需等待空闲）", timeout_ms=2200)
         else:
-            default_base = config.llm.base_url or "https://api.x.ai/v1"
-        asr_base_url = config.audio.asr_base_url or default_base
-        return asr_key, asr_base_url
+            logger.warning("[IdleInvasion] debug trigger no-op source=%s", source)
+            _notify("空闲入侵调试", "触发失败，请检查 GIF 资源与当前屏幕。", timeout_ms=4200)
 
     def _execute_voice_command(text: str, *, source: str) -> bool:
         cleaned = (text or "").strip()
@@ -322,7 +392,10 @@ def main() -> int:
             _summon_now_or_notify(f"voice:{source}")
         elif match.action == "screen_commentary":
             if _summon_now_or_notify(f"voice:{source}"):
-                QTimer.singleShot(700, director.request_screen_commentary)
+                QTimer.singleShot(
+                    700,
+                    lambda s=source: director.request_screen_commentary(source=f"voice:{s}"),
+                )
         elif match.action == "hide":
             if getattr(director.current_state, "name", "") != "HIDDEN":
                 director.toggle_visibility()
@@ -355,7 +428,7 @@ def main() -> int:
         def _worker() -> None:
             nonlocal _ptt_busy
             try:
-                asr_key, asr_base_url = _resolve_asr_runtime()
+                asr_key, asr_base_url = _resolve_asr_runtime(config)
                 text = VoiceWakeupListener.transcribe_once(
                     language=config.wakeup.language,
                     recognition_provider=config.audio.asr_provider,
@@ -423,7 +496,7 @@ def main() -> int:
         ):
             return
 
-        asr_key, asr_base_url = _resolve_asr_runtime()
+        asr_key, asr_base_url = _resolve_asr_runtime(config)
 
         listener = VoiceWakeupListener(
             phrases=config.wakeup.phrases,
@@ -444,7 +517,7 @@ def main() -> int:
             lowered = (heard or "").strip().lower()
             if (not matched) and any(keyword in lowered for keyword in ("看屏幕", "看看屏幕", "你在看什么", "屏幕上", "screen")):
                 logger.info("[VoiceWakeup] Wake phrase includes screen intent, auto request commentary")
-                QTimer.singleShot(1200, director.request_screen_commentary)
+                QTimer.singleShot(1200, lambda: director.request_screen_commentary(source="voice:wakeup_intent"))
             _notify("语音唤醒", f"已识别: {heard}", timeout_ms=2000)
 
         def _on_wakeup_error(message: str) -> None:
@@ -537,7 +610,8 @@ def main() -> int:
         tray_manager = SystemTrayManager(app, icon_path=icon_path)
         tray_manager.update_characters(manifests)
         tray_manager.summon_requested.connect(lambda: _summon_now_or_notify("tray"))
-        tray_manager.commentary_requested.connect(director.request_screen_commentary)
+        tray_manager.invasion_debug_requested.connect(lambda: _trigger_idle_invasion_debug("tray"))
+        tray_manager.commentary_requested.connect(lambda: director.request_screen_commentary(source="tray"))
         tray_manager.toggle_requested.connect(director.toggle_visibility)
         tray_manager.status_requested.connect(lambda: tray_manager.show_message("状态", director.get_status_summary()))
         tray_manager.open_logs_requested.connect(_open_logs_location)
@@ -575,6 +649,7 @@ def main() -> int:
         menu = QMenu()
         toggle_action = menu.addAction("显示/隐藏")
         summon_action = menu.addAction("立即召唤")
+        invasion_debug_action = menu.addAction("调试空闲入侵")
         commentary_action = menu.addAction("你在看什么？")
         open_logs_action = menu.addAction("打开日志目录")
         settings_action = menu.addAction("设置")
@@ -586,8 +661,10 @@ def main() -> int:
             director.toggle_visibility()
         elif chosen == summon_action:
             _summon_now_or_notify("context_menu")
+        elif chosen == invasion_debug_action:
+            _trigger_idle_invasion_debug("context_menu")
         elif chosen == commentary_action:
-            director.request_screen_commentary()
+            director.request_screen_commentary(source="context_menu")
         elif chosen == open_logs_action:
             _open_logs_location()
         elif chosen == settings_action:

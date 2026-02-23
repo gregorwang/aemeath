@@ -104,10 +104,14 @@ class IdleInvasionController(QObject):
         self._retreat_timer = QTimer(self)
         self._retreat_timer.setSingleShot(True)
         self._retreat_timer.timeout.connect(self._finish_retreat)
+        self._debug_force_timer = QTimer(self)
+        self._debug_force_timer.setSingleShot(True)
+        self._debug_force_timer.timeout.connect(self._on_debug_force_timeout)
 
         # ---- Idle tracking ----
         self._idle_time_ms = 0
         self._invasion_started = False  # True once idle exceeds start_delay_ms
+        self._debug_force_mode = False
 
         # Resolve absolute GIF paths.
         self._gif_paths: list[str] = self._resolve_gif_paths()
@@ -131,8 +135,34 @@ class IdleInvasionController(QObject):
         if not config.enabled and self._state != InvasionState.INACTIVE:
             self._begin_retreat()
 
+    def trigger_debug_invasion(self) -> bool:
+        """Force-start invasion immediately for manual debugging."""
+        self._debug_force_timer.stop()
+        self._spawn_timer.stop()
+        self._retreat_timer.stop()
+        self._dismiss_all_immediate()
+        self._state = InvasionState.INACTIVE
+        self._debug_force_mode = True
+        self._invasion_started = True
+        self._idle_time_ms = max(
+            self._idle_time_ms,
+            int(self._config.start_delay_ms) + 10 * 60_000,
+        )
+        self._gif_paths = self._resolve_gif_paths()
+        self._refresh_gif_sizes()
+        self._begin_spawning()
+        started = self._state in (InvasionState.SPAWNING, InvasionState.SATURATED)
+        if started:
+            # Keep debug invasion alive while the user is active for a short period.
+            self._debug_force_timer.start(120_000)
+        else:
+            self._debug_force_mode = False
+        LOGGER.info("[IdleInvasion] Debug trigger requested -> started=%s state=%s", started, self._state.name)
+        return started
+
     def shutdown(self) -> None:
         """Cleanup on application exit."""
+        self._debug_force_timer.stop()
         self._spawn_timer.stop()
         self._retreat_timer.stop()
         self._dismiss_all_immediate()
@@ -153,6 +183,14 @@ class IdleInvasionController(QObject):
     @Slot(int)
     def _on_idle_time_updated(self, idle_ms: int) -> None:
         """Called ~every 100 ms with the current idle time."""
+        if self._debug_force_mode:
+            # In debug mode ignore "active" fallback reset and hold high idle tier.
+            self._idle_time_ms = max(
+                int(self._config.start_delay_ms) + 10 * 60_000,
+                idle_ms,
+            )
+            return
+
         self._idle_time_ms = idle_ms
 
         if not self._config.enabled:
@@ -187,11 +225,22 @@ class IdleInvasionController(QObject):
     @Slot()
     def _on_user_active(self) -> None:
         """User moved mouse / pressed key → retreat all invaders."""
+        if self._debug_force_mode:
+            return
         if self._state in (InvasionState.SPAWNING, InvasionState.SATURATED):
             self._begin_retreat()
         elif self._state == InvasionState.INACTIVE:
             self._invasion_started = False
             self._idle_time_ms = 0
+
+    @Slot()
+    def _on_debug_force_timeout(self) -> None:
+        """Auto-end debug mode to avoid indefinite screen occupation."""
+        if not self._debug_force_mode:
+            return
+        self._debug_force_mode = False
+        if self._state in (InvasionState.SPAWNING, InvasionState.SATURATED):
+            self._begin_retreat()
 
     # ------------------------------------------------------------------
     # Spawning logic
@@ -367,6 +416,8 @@ class IdleInvasionController(QObject):
 
     def _begin_retreat(self) -> None:
         """Trigger all invaders to exit."""
+        self._debug_force_mode = False
+        self._debug_force_timer.stop()
         self._spawn_timer.stop()
         self._state = InvasionState.RETREATING
         LOGGER.info(
@@ -410,7 +461,9 @@ class IdleInvasionController(QObject):
 
     def _reset(self) -> None:
         """Return to INACTIVE state, ready for the next idle cycle."""
+        self._debug_force_timer.stop()
         self._state = InvasionState.INACTIVE
+        self._debug_force_mode = False
         self._invasion_started = False
         self._idle_time_ms = 0
         self._occupied.clear()

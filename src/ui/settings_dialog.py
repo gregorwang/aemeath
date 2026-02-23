@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from PySide6.QtWidgets import (
@@ -35,8 +35,10 @@ except ModuleNotFoundError:
 class SettingsDialog(QDialog):
     """Runtime settings editor."""
     MODEL_PRESETS = [
+        "grok-4-latest",
+        "grok-4",
         "grok-4-fast-reasoning",
-        "grok-4-fast",
+        "grok-code-fast-1",
         "grok-3-mini-fast",
         "grok-2-mini-transcribe",
         "deepseek-chat",
@@ -49,7 +51,7 @@ class SettingsDialog(QDialog):
     ]
     ENDPOINT_PRESETS = {
         "OpenAI 官方": ("openai", "https://api.openai.com/v1", "gpt-5-mini"),
-        "xAI 官方(推荐看图)": ("xai", "https://api.x.ai/v1", "grok-4-fast-reasoning"),
+        "xAI 官方(推荐看图)": ("xai", "https://api.x.ai", "grok-4-latest"),
         "DeepSeek 官方(当前文本为主)": ("deepseek", "https://api.deepseek.com/v1", "deepseek-chat"),
     }
 
@@ -177,7 +179,7 @@ class SettingsDialog(QDialog):
         self.model_combo.addItems(self.MODEL_PRESETS)
         self.model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.base_url_edit = QLineEdit(self)
-        self.base_url_edit.setPlaceholderText("例如 https://api.x.ai/v1 或 https://api.openai.com/v1")
+        self.base_url_edit.setPlaceholderText("例如 https://api.x.ai 或 https://api.openai.com/v1")
         self._connect_url_validation(self.base_url_edit)
         self.api_key_edit = self._create_password_line_edit()
         self.screen_streaming_checkbox = QCheckBox("屏幕解读使用流式输出", self)
@@ -439,6 +441,37 @@ class SettingsDialog(QDialog):
         valid = parsed.scheme in {"http", "https"} and bool(parsed.netloc)
         line_edit.setStyleSheet("" if valid else "QLineEdit { border: 1px solid #d9534f; }")
 
+    @staticmethod
+    def _normalize_base_url_for_probe(base_url: str) -> str:
+        """
+        Normalize base URL to OpenAI-compatible /v1 root before probing /models.
+        Accepts inputs such as:
+        - https://api.x.ai
+        - https://api.x.ai/v1
+        - https://api.x.ai/v1/chat/completions
+        """
+        raw = (base_url or "").strip().rstrip("/")
+        if not raw:
+            return ""
+        parsed = urlsplit(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return raw
+
+        path = (parsed.path or "").rstrip("/")
+        for suffix in ("/chat/completions", "/responses", "/audio/transcriptions", "/audio/translations"):
+            if path.endswith(suffix):
+                path = path[: -len(suffix)]
+                break
+        if "/v1/" in path:
+            path = path.split("/v1/", maxsplit=1)[0] + "/v1"
+        elif path.endswith("/v1"):
+            pass
+        elif not path:
+            path = "/v1"
+        else:
+            path = f"{path}/v1"
+        return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
     def _test_api_connection(self) -> None:
         """Test the current AI provider endpoint and show a result dialog."""
         provider = self.provider_combo.currentText().strip().lower()
@@ -456,7 +489,8 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "API 连接测试", "API Base URL 格式错误，请修正后再测试。")
             return
 
-        probe_url = f"{base_url.rstrip('/')}/models"
+        probe_base = self._normalize_base_url_for_probe(base_url)
+        probe_url = f"{probe_base.rstrip('/')}/models"
         headers = {"Accept": "application/json"}
         api_key = self.api_key_edit.text().strip()
         if api_key:
@@ -525,7 +559,7 @@ class SettingsDialog(QDialog):
         self.invasion_gifs_edit.setText(", ".join(config.idle_invasion.participating_gifs))
 
         self._set_combo_text(self.provider_combo, config.llm.provider, "xai")
-        self._set_combo_text(self.model_combo, config.llm.model, "grok-4-fast-reasoning")
+        self._set_combo_text(self.model_combo, config.llm.model, "grok-4-latest")
         self.endpoint_preset_combo.setCurrentIndex(0)
         self.base_url_edit.setText(config.llm.base_url)
         self.api_key_edit.setText(config.llm.api_key)
@@ -603,8 +637,8 @@ class SettingsDialog(QDialog):
             voice_input_mode=str(self.voice_input_mode_combo.currentData() or "push_to_talk"),
             asr_provider=self.asr_provider_combo.currentText().strip().lower() or "zhipu_asr",
             asr_api_key=self.asr_api_key_edit.text().strip(),
-            asr_model=self.asr_model_edit.text().strip() or self._source.audio.asr_model,
-            asr_base_url=self.asr_base_url_edit.text().strip() or self._source.audio.asr_base_url,
+            asr_model=self.asr_model_edit.text().strip(),
+            asr_base_url=self.asr_base_url_edit.text().strip(),
             asr_temperature=float(self.asr_temperature_spin.value()),
             asr_prompt=self.asr_prompt_edit.text().strip(),
         )
@@ -651,8 +685,7 @@ class SettingsDialog(QDialog):
                 ocr_fallback_enabled=False,
                 stream_chunk_chars=int(self.screen_chunk_chars_spin.value()),
                 max_response_chars=int(self.screen_max_chars_spin.value()),
-                preamble_text=self.screen_preamble_edit.text().strip()
-                or self._source.screen_commentary.preamble_text,
+                preamble_text=self.screen_preamble_edit.text().strip(),
                 auto_enabled=self.screen_auto_commentary_checkbox.isChecked(),
                 auto_interval_minutes=int(self.screen_auto_interval_spin.value()),
             ),

@@ -68,9 +68,9 @@ class WakeupConfig:
 @dataclass(slots=True)
 class LLMConfig:
     provider: str = "xai"  # none / openai / xai / deepseek
-    model: str = "grok-4-fast-reasoning"
+    model: str = "grok-4-latest"
     api_key: str = ""
-    base_url: str = "https://api.x.ai/v1"
+    base_url: str = "https://api.x.ai"
 
 
 @dataclass(slots=True)
@@ -392,9 +392,9 @@ class ConfigManager:
             provider = "xai"
         return LLMConfig(
             provider=provider,
-            model=str(payload.get("model", "grok-4-fast-reasoning")),
+            model=str(payload.get("model", "grok-4-latest")),
             api_key=str(payload.get("api_key", "")),
-            base_url=str(payload.get("base_url", "https://api.x.ai/v1")),
+            base_url=str(payload.get("base_url", "https://api.x.ai")),
         )
 
     @staticmethod

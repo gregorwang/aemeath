@@ -24,7 +24,7 @@ from .entropy_engine import EntropyEngine
 from .gif_state_mapper import GifStateMapper
 from .idle_monitor import IdleMonitor
 from .mood_system import MoodSystem
-from .presence_detector import PresenceDetector, PresenceState
+from .presence_detector import PresenceDetector
 from .resource_scheduler import ResourceScheduler
 from .script_engine import ScriptEngine
 from .state_machine import EntityState, StateMachine
@@ -130,7 +130,6 @@ class Director(QObject):
         self._eye_tracking_enabled = bool(getattr(getattr(app_config, "vision", None), "eye_tracking_enabled", True))
         self._latest_idle_time_ms = 0
         self._latest_gaze_data = GazeData(face_detected=False)
-        self._silent_presence_mode = False
         self._current_ascii_template = ""
         self._stable_expression = "neutral"
         self._expression_votes: dict[str, int] = {"happy": 0, "neutral": 0, "angry": 0, "sad": 0}
@@ -172,7 +171,6 @@ class Director(QObject):
         self._voice_trajectory_playing = False
         self._behavior_mode = BehaviorMode.BUSY
         self._audio_output_active = False
-        self._audio_forced_visible = False
         self._self_playback_active = False
 
         self._auto_dismiss_timer = QTimer(self)
@@ -268,25 +266,13 @@ class Director(QObject):
                 self._idle_monitor.reset_to_standby()
                 self._arm_idle_threshold_with_jitter()
             return
+        if bool(getattr(getattr(self._config, "idle_invasion", None), "enabled", False)):
+            self.LOGGER.info("[IdleBehavior] Legacy idle summon skipped: idle_invasion enabled")
+            if self._idle_monitor is not None:
+                self._idle_monitor.reset_to_standby()
+                self._arm_idle_threshold_with_jitter()
+            return
 
-        presence_state = self._presence_detector.determine_presence(
-            idle_time_ms=self._latest_idle_time_ms,
-            gaze_data=self._latest_gaze_data if self._camera_enabled else None,
-        )
-        if presence_state == PresenceState.PRESENT_ACTIVE:
-            self._set_behavior_mode(BehaviorMode.BUSY, apply_visual=False)
-            if self._idle_monitor is not None:
-                self._idle_monitor.reset_to_standby()
-                self._arm_idle_threshold_with_jitter()
-            return
-        if presence_state == PresenceState.ABSENT:
-            # Deep-sleep behavior entry point (Phase 4 expansion hook).
-            self._set_behavior_mode(BehaviorMode.BUSY, apply_visual=False)
-            if self._idle_monitor is not None:
-                self._idle_monitor.reset_to_standby()
-                self._arm_idle_threshold_with_jitter()
-            return
-        self._silent_presence_mode = presence_state == PresenceState.PRESENT_PASSIVE
         self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
         self._state_machine.transition_to(EntityState.ENGAGED)
 
@@ -356,18 +342,9 @@ class Director(QObject):
         state = self._state_machine.current_state
         if state == EntityState.FLEEING:
             return False
-        previous_mode = getattr(self, "_behavior_mode", BehaviorMode.BUSY)
-        behavior_setter = getattr(self, "_set_behavior_mode", None)
-        if callable(behavior_setter):
-            behavior_setter(BehaviorMode.SUMMONING, apply_visual=False)
         if state == EntityState.HIDDEN:
-            try:
-                self._try_start_voice_scripted_entrance()
-                return True
-            except Exception:
-                if callable(behavior_setter):
-                    behavior_setter(previous_mode, apply_visual=False)
-                raise
+            self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
+            return self._state_machine.transition_to(EntityState.ENGAGED)
         if state == EntityState.PEEKING:
             return self._state_machine.transition_to(EntityState.ENGAGED)
         if state == EntityState.ENGAGED:
@@ -418,7 +395,6 @@ class Director(QObject):
             if self._audio_output_active and self._gif_state_mapper is not None:
                 self._gif_state_mapper.on_audio_stopped()
             self._audio_output_active = False
-            self._audio_forced_visible = False
             if self._behavior_mode == BehaviorMode.MEDIA_PLAYING:
                 fallback = BehaviorMode.IDLE if self._state_machine.current_state != EntityState.HIDDEN else BehaviorMode.BUSY
                 self._set_behavior_mode(fallback)
@@ -478,8 +454,8 @@ class Director(QObject):
         if self._idle_monitor is not None:
             self._idle_monitor.reset_to_standby()
             self._arm_idle_threshold_with_jitter()
-        self._silent_presence_mode = False
-        self._audio_forced_visible = False
+        # Clear cached script so each hidden->engaged cycle can reselect by current time/cooldown.
+        self._pending_idle_script = None
         # Start prolonged idle timer when going hidden
         self._prolonged_idle_timer.start()
         self._current_ascii_template = ""
@@ -511,11 +487,7 @@ class Director(QObject):
         elif hasattr(self._entity_window, "enter"):
             self._entity_window.enter(script=script)
 
-        if (
-            script is not None
-            and not self._silent_presence_mode
-            and self._behavior_mode != BehaviorMode.SUMMONING
-        ):
+        if script is not None and self._behavior_mode != BehaviorMode.SUMMONING:
             self._mood_system.on_interacted()
             self._audio_manager.play_script(script, priority=AudioPriority.HIGH)
 
@@ -582,13 +554,6 @@ class Director(QObject):
         if self._self_playback_active:
             self.LOGGER.debug("[AudioOutputMonitor] 忽略本进程语音播放触发的音频输出")
             return
-        if self._state_machine.current_state == EntityState.HIDDEN:
-            try:
-                self._audio_forced_visible = bool(self.summon_now())
-            except ScriptedEntranceError as exc:
-                self._audio_forced_visible = False
-                self.LOGGER.error("[SummonTrajectory] 音频触发召唤失败: %s", exc)
-                return
         self._audio_output_active = True
         if self._gif_state_mapper:
             self._gif_state_mapper.on_audio_started()
@@ -603,14 +568,6 @@ class Director(QObject):
         self._audio_output_active = False
         if self._gif_state_mapper:
             self._gif_state_mapper.on_audio_stopped()
-        if (
-            self._audio_forced_visible
-            and self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED)
-        ):
-            self._audio_forced_visible = False
-            self._state_machine.transition_to(EntityState.HIDDEN)
-            return
-        self._audio_forced_visible = False
         if self._behavior_mode == BehaviorMode.SUMMONING:
             return
         self._set_behavior_mode(BehaviorMode.IDLE if self._state_machine.current_state != EntityState.HIDDEN else BehaviorMode.BUSY)
@@ -818,8 +775,7 @@ class Director(QObject):
 
         self._stable_expression = winner
         self._last_expression_visual_at = now
-        state_name = self.EXPRESSION_STATE_MAP.get(winner, "state1")
-        self._set_entity_state(state_name, as_base=False)
+        self.LOGGER.debug("[Vision] Stable expression=%s score=%s", winner, self._expression_votes[winner])
 
     def _maybe_trigger_sad_comfort(self, gaze_data: GazeData) -> None:
         if not self._camera_enabled:
@@ -855,10 +811,6 @@ class Director(QObject):
             )
         except Exception as exc:
             self.LOGGER.warning("[EmotionComfort] TTS trigger failed: %s", exc)
-        try:
-            self._try_start_voice_scripted_entrance()
-        except Exception as exc:
-            self.LOGGER.warning("[EmotionComfort] Trajectory trigger failed: %s", exc)
 
     def _reset_no_face_tracker(self) -> None:
         self._no_face_absent_since = None
@@ -905,10 +857,6 @@ class Director(QObject):
             )
         except Exception as exc:
             self.LOGGER.warning("[NoFaceTest] TTS trigger failed: %s", exc)
-        try:
-            self._try_start_voice_scripted_entrance()
-        except Exception as exc:
-            self.LOGGER.warning("[NoFaceTest] Trajectory trigger failed: %s", exc)
 
     @staticmethod
     def _build_fallback_ascii(text: str) -> str:
@@ -1050,7 +998,6 @@ class Director(QObject):
 
         self._stop_auto_dismiss_timer()
         self._set_entity_autonomous(False)
-        self._silent_presence_mode = False
         self._set_behavior_mode(BehaviorMode.SUMMONING, apply_visual=False)
 
         try:
