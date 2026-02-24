@@ -41,6 +41,8 @@ class SystemTrayManagerTest(unittest.TestCase):
         fired: list[str] = []
         self._manager.summon_requested.connect(lambda: fired.append("summon"))
         self._manager.invasion_debug_requested.connect(lambda: fired.append("invasion_debug"))
+        self._manager.sad_comfort_debug_requested.connect(lambda: fired.append("sad_comfort_debug"))
+        self._manager.no_face_debug_requested.connect(lambda: fired.append("no_face_debug"))
         self._manager.commentary_requested.connect(lambda: fired.append("commentary"))
         self._manager.settings_requested.connect(lambda: fired.append("settings"))
         self._manager.status_requested.connect(lambda: fired.append("status"))
@@ -50,6 +52,8 @@ class SystemTrayManagerTest(unittest.TestCase):
         actions_by_text = {action.text(): action for action in self._manager._menu.actions() if action.text()}
         actions_by_text["立即召唤"].trigger()
         actions_by_text["调试空闲入侵"].trigger()
+        actions_by_text["调试悲伤安慰"].trigger()
+        actions_by_text["调试无人脸提醒"].trigger()
         actions_by_text["你在看什么？"].trigger()
         actions_by_text["设置"].trigger()
         actions_by_text["状态"].trigger()
@@ -58,7 +62,17 @@ class SystemTrayManagerTest(unittest.TestCase):
 
         self.assertEqual(
             fired,
-            ["summon", "invasion_debug", "commentary", "settings", "status", "open_logs", "quit"],
+            [
+                "summon",
+                "invasion_debug",
+                "sad_comfort_debug",
+                "no_face_debug",
+                "commentary",
+                "settings",
+                "status",
+                "open_logs",
+                "quit",
+            ],
         )
 
     def test_update_characters_builds_submenu_and_emits_switch(self) -> None:

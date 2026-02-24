@@ -404,6 +404,34 @@ def main() -> int:
             logger.warning("[IdleInvasion] debug trigger no-op source=%s", source)
             _notify("空闲入侵调试", "触发失败，请检查 GIF 资源与当前屏幕。", timeout_ms=4200)
 
+    def _trigger_sad_comfort_debug(source: str) -> None:
+        try:
+            started = bool(director.trigger_sad_comfort_debug(source=source))
+        except Exception as exc:
+            logger.exception("[EmotionComfort] debug trigger failed source=%s: %s", source, exc)
+            _notify("悲伤安慰调试失败", f"{exc}", timeout_ms=4200)
+            return
+        if started:
+            logger.info("[EmotionComfort] debug trigger success source=%s", source)
+            _notify("悲伤安慰调试", "已触发悲伤安慰语音（无需摄像头情绪条件）", timeout_ms=2200)
+        else:
+            logger.warning("[EmotionComfort] debug trigger skipped source=%s", source)
+            _notify("悲伤安慰调试", "触发已跳过（可能在退场或轨迹召唤中）", timeout_ms=3200)
+
+    def _trigger_no_face_debug(source: str) -> None:
+        try:
+            started = bool(director.trigger_no_face_test_debug(source=source))
+        except Exception as exc:
+            logger.exception("[NoFaceTest] debug trigger failed source=%s: %s", source, exc)
+            _notify("无人脸提醒调试失败", f"{exc}", timeout_ms=4200)
+            return
+        if started:
+            logger.info("[NoFaceTest] debug trigger success source=%s", source)
+            _notify("无人脸提醒调试", "已触发无人脸提醒语音（无需等待摄像头缺脸）", timeout_ms=2200)
+        else:
+            logger.warning("[NoFaceTest] debug trigger skipped source=%s", source)
+            _notify("无人脸提醒调试", "触发已跳过（可能在退场或轨迹召唤中）", timeout_ms=3200)
+
     def _execute_voice_command(text: str, *, source: str) -> bool:
         cleaned = (text or "").strip()
         if not cleaned:
@@ -436,6 +464,10 @@ def main() -> int:
             director.toggle_visibility()
         elif match.action == "status":
             _notify("状态", director.get_status_summary(), timeout_ms=4500)
+        elif match.action == "sad_comfort_debug":
+            _trigger_sad_comfort_debug(f"voice:{source}")
+        elif match.action == "no_face_debug":
+            _trigger_no_face_debug(f"voice:{source}")
         else:
             return False
         _notify("语音命令", f"{cleaned}\n→ {match.action} ({match.score})", timeout_ms=1800)
@@ -644,6 +676,8 @@ def main() -> int:
         tray_manager.update_characters(manifests)
         tray_manager.summon_requested.connect(lambda: _summon_now_or_notify("tray"))
         tray_manager.invasion_debug_requested.connect(lambda: _trigger_idle_invasion_debug("tray"))
+        tray_manager.sad_comfort_debug_requested.connect(lambda: _trigger_sad_comfort_debug("tray"))
+        tray_manager.no_face_debug_requested.connect(lambda: _trigger_no_face_debug("tray"))
         tray_manager.commentary_requested.connect(lambda: director.request_screen_commentary(source="tray"))
         tray_manager.toggle_requested.connect(director.toggle_visibility)
         tray_manager.status_requested.connect(lambda: tray_manager.show_message("状态", director.get_status_summary()))
@@ -683,6 +717,8 @@ def main() -> int:
         toggle_action = menu.addAction("显示/隐藏")
         summon_action = menu.addAction("立即召唤")
         invasion_debug_action = menu.addAction("调试空闲入侵")
+        sad_comfort_debug_action = menu.addAction("调试悲伤安慰")
+        no_face_debug_action = menu.addAction("调试无人脸提醒")
         commentary_action = menu.addAction("你在看什么？")
         open_logs_action = menu.addAction("打开日志目录")
         settings_action = menu.addAction("设置")
@@ -696,6 +732,10 @@ def main() -> int:
             _summon_now_or_notify("context_menu")
         elif chosen == invasion_debug_action:
             _trigger_idle_invasion_debug("context_menu")
+        elif chosen == sad_comfort_debug_action:
+            _trigger_sad_comfort_debug("context_menu")
+        elif chosen == no_face_debug_action:
+            _trigger_no_face_debug("context_menu")
         elif chosen == commentary_action:
             director.request_screen_commentary(source="context_menu")
         elif chosen == open_logs_action:

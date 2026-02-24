@@ -27,6 +27,18 @@ class VoiceCommandMatcherTest(unittest.TestCase):
     def test_unmatched_text_returns_none(self) -> None:
         self.assertIsNone(VoiceCommandMatcher.match("今天天气怎么样"))
 
+    def test_match_sad_comfort_debug_phrase(self) -> None:
+        match = VoiceCommandMatcher.match("请帮我调试悲伤安慰")
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(match.action, "sad_comfort_debug")
+
+    def test_match_no_face_debug_phrase(self) -> None:
+        match = VoiceCommandMatcher.match("现在触发无人脸提醒")
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(match.action, "no_face_debug")
+
     def test_normalize_text(self) -> None:
         self.assertEqual(VoiceCommandMatcher.normalize_text("  看，看 屏幕！ "), "看看屏幕")
 

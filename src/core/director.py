@@ -287,6 +287,30 @@ class Director(QObject):
         if self._idle_monitor is not None:
             self._idle_monitor.reset_to_standby()
 
+    def trigger_sad_comfort_debug(self, *, source: str = "manual") -> bool:
+        source_name = (source or "manual").strip().lower() or "manual"
+        if self._voice_trajectory_playing:
+            self.LOGGER.info("[EmotionComfort] Debug trigger skipped: voice trajectory active source=%s", source_name)
+            return False
+        if self._state_machine.current_state == EntityState.FLEEING:
+            self.LOGGER.info("[EmotionComfort] Debug trigger skipped: state=fleeing source=%s", source_name)
+            return False
+        self.LOGGER.info("[EmotionComfort] Debug trigger requested source=%s", source_name)
+        QTimer.singleShot(0, self._trigger_sad_comfort)
+        return True
+
+    def trigger_no_face_test_debug(self, *, source: str = "manual") -> bool:
+        source_name = (source or "manual").strip().lower() or "manual"
+        if self._voice_trajectory_playing:
+            self.LOGGER.info("[NoFaceTest] Debug trigger skipped: voice trajectory active source=%s", source_name)
+            return False
+        if self._state_machine.current_state == EntityState.FLEEING:
+            self.LOGGER.info("[NoFaceTest] Debug trigger skipped: state=fleeing source=%s", source_name)
+            return False
+        self.LOGGER.info("[NoFaceTest] Debug trigger requested source=%s", source_name)
+        QTimer.singleShot(0, self._trigger_no_face_test)
+        return True
+
     def request_screen_commentary(self, *, source: str = "manual") -> None:
         if self._screen_commentator is None:
             self.LOGGER.warning("[ScreenCommentary] Skipped: commentator unavailable")
