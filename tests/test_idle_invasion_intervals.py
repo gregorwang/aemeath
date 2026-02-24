@@ -31,6 +31,18 @@ def _subject(
 
 
 class IdleInvasionIntervalsTest(unittest.TestCase):
+    def test_fixed_interval_when_initial_equals_min(self) -> None:
+        subject = _subject(
+            idle_ms=300_000 + 15 * 60_000,
+            start_delay_ms=300_000,
+            initial_spawn_interval_ms=60_000,
+            min_spawn_interval_ms=60_000,
+        )
+        with patch("core.idle_invasion.random.randint") as mocked:
+            value = IdleInvasionController._current_spawn_interval(subject)
+        self.assertEqual(value, 60_000)
+        mocked.assert_not_called()
+
     def test_stage1_interval_bounds(self) -> None:
         subject = _subject(idle_ms=180_000 + 60_000)
         with patch("core.idle_invasion.random.randint", return_value=9_123) as mocked:

@@ -277,6 +277,9 @@ class IdleInvasionController(QObject):
         extra_idle_ms = max(0, self._idle_time_ms - self._config.start_delay_ms)
         initial_ms = max(500, int(self._config.initial_spawn_interval_ms))
         min_ms = max(500, int(self._config.min_spawn_interval_ms))
+        if initial_ms == min_ms:
+            # Fixed cadence mode (e.g. production: one invader per minute).
+            return initial_ms
 
         # Phase-2 cadence profile (defaults map to:
         # 0-3m: 8-12s, 3-5m: 5-8s, 5-10m: 3-5s, 10m+: 2-3s).

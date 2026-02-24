@@ -20,6 +20,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     QSequentialAnimationGroup,
+    QSize,
     QTimer,
     QVariantAnimation,
     Qt,
@@ -113,9 +114,16 @@ class GifParticle(QWidget):
 
         # Apply scale
         if self._config.scale != 1.0:
-            movie.setScaledSize(
-                movie.currentImage().size() * self._config.scale
-            )
+            frame_size = movie.frameRect().size()
+            if frame_size.isEmpty():
+                movie.jumpToFrame(0)
+                frame_size = movie.currentImage().size()
+            if not frame_size.isEmpty():
+                scaled = QSize(
+                    max(1, int(round(frame_size.width() * self._config.scale))),
+                    max(1, int(round(frame_size.height() * self._config.scale))),
+                )
+                movie.setScaledSize(scaled)
 
         label.setMovie(movie)
         self._movie = movie

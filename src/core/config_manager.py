@@ -88,9 +88,9 @@ class ScreenCommentaryConfig:
 class IdleInvasionConfig:
     """Configuration for the idle invasion feature."""
     enabled: bool = True
-    start_delay_ms: int = 180_000
-    initial_spawn_interval_ms: int = 10_000
-    min_spawn_interval_ms: int = 2_000
+    start_delay_ms: int = 300_000
+    initial_spawn_interval_ms: int = 60_000
+    min_spawn_interval_ms: int = 60_000
     max_invaders: int = 40
     scale: float = 0.7
     cell_padding: int = 20
@@ -427,9 +427,9 @@ class ConfigManager:
             retreat = "scatter"
         return IdleInvasionConfig(
             enabled=bool(payload.get("enabled", True)),
-            start_delay_ms=max(5000, int(payload.get("start_delay_ms", 180_000))),
-            initial_spawn_interval_ms=max(1000, int(payload.get("initial_spawn_interval_ms", 10_000))),
-            min_spawn_interval_ms=max(500, int(payload.get("min_spawn_interval_ms", 2_000))),
+            start_delay_ms=max(5000, int(payload.get("start_delay_ms", 300_000))),
+            initial_spawn_interval_ms=max(1000, int(payload.get("initial_spawn_interval_ms", 60_000))),
+            min_spawn_interval_ms=max(500, int(payload.get("min_spawn_interval_ms", 60_000))),
             max_invaders=max(1, min(100, int(payload.get("max_invaders", 40)))),
             scale=max(0.2, min(2.0, float(payload.get("scale", 0.7)))),
             cell_padding=max(0, min(100, int(payload.get("cell_padding", 20)))),

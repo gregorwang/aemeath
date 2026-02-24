@@ -172,6 +172,24 @@ def _is_truthy_env(name: str) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _apply_normal_idle_profile(config) -> bool:
+    """Apply the default non-dev idle invasion cadence."""
+    changed = False
+    if not bool(config.idle_invasion.enabled):
+        config.idle_invasion.enabled = True
+        changed = True
+    if int(config.idle_invasion.start_delay_ms) != 300_000:
+        config.idle_invasion.start_delay_ms = 300_000
+        changed = True
+    if int(config.idle_invasion.initial_spawn_interval_ms) != 60_000:
+        config.idle_invasion.initial_spawn_interval_ms = 60_000
+        changed = True
+    if int(config.idle_invasion.min_spawn_interval_ms) != 60_000:
+        config.idle_invasion.min_spawn_interval_ms = 60_000
+        changed = True
+    return changed
+
+
 def _apply_dev_fast_idle_profile(config) -> bool:
     """Apply runtime-only idle/invasion acceleration for local dev runs."""
     if not _is_truthy_env("AEMEATH_DEV_FAST_IDLE"):
@@ -214,7 +232,8 @@ def main() -> int:
     config = config_manager.load()
     if _migrate_legacy_asr_defaults(config) or _migrate_legacy_llm_defaults(config):
         config_manager.save(config)
-    _apply_dev_fast_idle_profile(config)
+    normal_idle_profile_applied = _apply_normal_idle_profile(config)
+    dev_fast_idle_applied = _apply_dev_fast_idle_profile(config)
     if config.llm.api_key:
         os.environ["OPENAI_API_KEY"] = config.llm.api_key
         os.environ["POLOAI_API_KEY"] = config.llm.api_key
@@ -226,6 +245,20 @@ def main() -> int:
     logger = setup_logger(get_log_dir(), debug=config.behavior.debug_mode)
     log_file = get_log_file()
     logger.info("Application starting. base_dir=%s config=%s", base_dir, config_path)
+    if not _is_truthy_env("AEMEATH_DEV_FAST_IDLE"):
+        if normal_idle_profile_applied:
+            logger.info(
+                "[IdleInvasion] Normal profile enforced: start_delay=%sms interval=%sms",
+                config.idle_invasion.start_delay_ms,
+                config.idle_invasion.initial_spawn_interval_ms,
+            )
+    elif dev_fast_idle_applied:
+        logger.info(
+            "[IdleInvasion] Dev fast profile applied: start_delay=%sms initial_interval=%sms min_interval=%sms",
+            config.idle_invasion.start_delay_ms,
+            config.idle_invasion.initial_spawn_interval_ms,
+            config.idle_invasion.min_spawn_interval_ms,
+        )
     if _is_truthy_env("AEMEATH_DEV_FAST_IDLE"):
         logger.info(
             "[DevMode] FAST_IDLE enabled: idle_threshold=%ss start_delay=%sms initial_interval=%sms min_interval=%sms",

@@ -103,9 +103,9 @@ class MainRuntimeMigrationsTest(unittest.TestCase):
         config = AppConfig()
         config.trigger.idle_threshold_seconds = 180
         config.idle_invasion.enabled = True
-        config.idle_invasion.start_delay_ms = 180_000
-        config.idle_invasion.initial_spawn_interval_ms = 10_000
-        config.idle_invasion.min_spawn_interval_ms = 2_000
+        config.idle_invasion.start_delay_ms = 300_000
+        config.idle_invasion.initial_spawn_interval_ms = 60_000
+        config.idle_invasion.min_spawn_interval_ms = 60_000
 
         with patch.dict(os.environ, {"AEMEATH_DEV_FAST_IDLE": "1"}, clear=False):
             changed = MAIN_MODULE._apply_dev_fast_idle_profile(config)
@@ -120,18 +120,32 @@ class MainRuntimeMigrationsTest(unittest.TestCase):
         config = AppConfig()
         config.trigger.idle_threshold_seconds = 180
         config.idle_invasion.enabled = True
-        config.idle_invasion.start_delay_ms = 180_000
-        config.idle_invasion.initial_spawn_interval_ms = 10_000
-        config.idle_invasion.min_spawn_interval_ms = 2_000
+        config.idle_invasion.start_delay_ms = 300_000
+        config.idle_invasion.initial_spawn_interval_ms = 60_000
+        config.idle_invasion.min_spawn_interval_ms = 60_000
 
         with patch.dict(os.environ, {"AEMEATH_DEV_FAST_IDLE": "0"}, clear=False):
             changed = MAIN_MODULE._apply_dev_fast_idle_profile(config)
 
         self.assertFalse(changed)
         self.assertEqual(config.trigger.idle_threshold_seconds, 180)
-        self.assertEqual(config.idle_invasion.start_delay_ms, 180_000)
-        self.assertEqual(config.idle_invasion.initial_spawn_interval_ms, 10_000)
-        self.assertEqual(config.idle_invasion.min_spawn_interval_ms, 2_000)
+        self.assertEqual(config.idle_invasion.start_delay_ms, 300_000)
+        self.assertEqual(config.idle_invasion.initial_spawn_interval_ms, 60_000)
+        self.assertEqual(config.idle_invasion.min_spawn_interval_ms, 60_000)
+
+    def test_apply_normal_idle_profile_enforces_five_minute_one_per_minute(self) -> None:
+        config = AppConfig()
+        config.idle_invasion.enabled = True
+        config.idle_invasion.start_delay_ms = 60_000
+        config.idle_invasion.initial_spawn_interval_ms = 2_000
+        config.idle_invasion.min_spawn_interval_ms = 500
+
+        changed = MAIN_MODULE._apply_normal_idle_profile(config)
+
+        self.assertTrue(changed)
+        self.assertEqual(config.idle_invasion.start_delay_ms, 300_000)
+        self.assertEqual(config.idle_invasion.initial_spawn_interval_ms, 60_000)
+        self.assertEqual(config.idle_invasion.min_spawn_interval_ms, 60_000)
 
 
 if __name__ == "__main__":

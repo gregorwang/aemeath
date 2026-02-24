@@ -70,3 +70,20 @@ pyinstaller --clean --noconfirm build.spec
 ## Security & Configuration Tips
 - Never commit real API keys or secrets in `config.json`/`version.json`.
 - Prefer environment variables for credentials (for example `OPENAI_API_KEY`).
+
+## Idle Invasion Debug Checklist
+- Separate **trigger success** from **visual render success**. `app.log` may show invasion started even when particles are visually tiny/invisible.
+- When validating manual debug trigger, first confirm these log lines in order:
+  - `[IdleInvasion] Debug trigger requested -> started=True`
+  - `[IdleInvasion] Invasion started`
+  - Optional later: `[IdleInvasion] Retreat triggered ...`
+- If started but nothing is visible, inspect GIF sizing path in `src/ui/gif_particle.py`:
+  - Do not derive scaled size from `currentImage()` before a valid frame is loaded.
+  - Read `frameRect()` or `jumpToFrame(0)` first, then apply scale.
+- Dev helper behavior:
+  - `dev_run.ps1` sets `AEMEATH_DEV_FAST_IDLE=1` for runtime acceleration.
+  - This changes cadence only for that run; it is not the same as production timing assumptions.
+- Timing model reminder (default values):
+  - Start delay: `180000ms` (3 minutes) before first invader.
+  - Spawn interval then accelerates by idle stage (not fixed “every 1 minute” / “every 3 minutes”).
+- When behavior appears inconsistent, verify there is only one app instance being observed and that logs correspond to that same process/session.
