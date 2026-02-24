@@ -24,7 +24,7 @@ from .entropy_engine import EntropyEngine
 from .gif_state_mapper import GifStateMapper
 from .idle_monitor import IdleMonitor
 from .mood_system import MoodSystem
-from .presence_detector import PresenceDetector
+from .presence_detector import PresenceDetector, PresenceState
 from .resource_scheduler import ResourceScheduler
 from .script_engine import ScriptEngine
 from .state_machine import EntityState, StateMachine
@@ -83,11 +83,18 @@ class Director(QObject):
     NO_FACE_TEST_TEXT = "我暂时看不到你，等你回来。"
     NO_FACE_TEST_MIN_ABSENCE_SECONDS = 3.0
     NO_FACE_TEST_COOLDOWN_SECONDS = 20.0
+    PASSIVE_COMPANION_DURATION_MS = 30_000
     EXPRESSION_STATE_MAP = {
         "happy": "state6",
         "neutral": "state1",
         "angry": "state4",
         "sad": "state5",
+    }
+    EXPRESSION_MOOD_DELTA = {
+        "happy": 0.05,
+        "neutral": 0.0,
+        "angry": -0.05,
+        "sad": -0.03,
     }
 
     def __init__(
@@ -130,6 +137,10 @@ class Director(QObject):
         self._eye_tracking_enabled = bool(getattr(getattr(app_config, "vision", None), "eye_tracking_enabled", True))
         self._latest_idle_time_ms = 0
         self._latest_gaze_data = GazeData(face_detected=False)
+        self._latest_presence_state = PresenceState.UNKNOWN
+        self._deep_sleep_active = False
+        self._passive_presence_active = False
+        self._suppress_engaged_script_once = False
         self._current_ascii_template = ""
         self._stable_expression = "neutral"
         self._expression_votes: dict[str, int] = {"happy": 0, "neutral": 0, "angry": 0, "sad": 0}
@@ -193,6 +204,9 @@ class Director(QObject):
         self._auto_screen_commentary_timer = QTimer(self)
         self._auto_screen_commentary_timer.setSingleShot(True)
         self._auto_screen_commentary_timer.timeout.connect(self._on_auto_screen_commentary_timeout)
+        self._passive_presence_timer = QTimer(self)
+        self._passive_presence_timer.setSingleShot(True)
+        self._passive_presence_timer.timeout.connect(self._on_passive_presence_timeout)
 
         self._state_machine.register_state_handler(EntityState.HIDDEN, on_enter=self._enter_hidden)
         self._state_machine.register_state_handler(
@@ -280,6 +294,14 @@ class Director(QObject):
     def on_user_active(self) -> None:
         self._set_behavior_mode(BehaviorMode.BUSY)
         state = self._state_machine.current_state
+        if self._passive_presence_active or self._deep_sleep_active:
+            self._passive_presence_active = False
+            self._deep_sleep_active = False
+            if self._passive_presence_timer.isActive():
+                self._passive_presence_timer.stop()
+            if state in (EntityState.PEEKING, EntityState.ENGAGED):
+                self._state_machine.transition_to(EntityState.HIDDEN)
+                return
         if state in (EntityState.PEEKING, EntityState.ENGAGED):
             self._mood_system.on_dismissed()
             self._state_machine.transition_to(EntityState.FLEEING)
@@ -413,6 +435,11 @@ class Director(QObject):
             self._stop_camera_tracking()
             self._reset_no_face_tracker()
             self._latest_gaze_data = GazeData(face_detected=False)
+            self._latest_presence_state = PresenceState.UNKNOWN
+            self._deep_sleep_active = False
+            self._passive_presence_active = False
+            if self._passive_presence_timer.isActive():
+                self._passive_presence_timer.stop()
         elif self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED):
             self._start_camera_tracking_if_needed()
         if not self._audio_output_reactive:
@@ -457,6 +484,9 @@ class Director(QObject):
             self._mood_decay_timer.stop()
         if self._prolonged_idle_timer.isActive():
             self._prolonged_idle_timer.stop()
+        passive_timer = getattr(self, "_passive_presence_timer", None)
+        if passive_timer is not None and passive_timer.isActive():
+            passive_timer.stop()
         self._stop_camera_tracking()
         if self._audio_output_monitor:
             self._audio_output_monitor.stop()
@@ -470,6 +500,12 @@ class Director(QObject):
         self._stop_auto_dismiss_timer()
         self._stop_camera_tracking()
         self._reset_no_face_tracker()
+        self._deep_sleep_active = False
+        self._passive_presence_active = False
+        self._suppress_engaged_script_once = False
+        timer = getattr(self, "_passive_presence_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
         self._set_entity_autonomous(False)
         if hasattr(self._entity_window, "hide_now"):
             self._entity_window.hide_now()
@@ -491,8 +527,12 @@ class Director(QObject):
     def _enter_engaged(self) -> None:
         self._start_camera_tracking_if_needed()
         self._set_entity_state("state1")
+        silent_presence_entry = self._suppress_engaged_script_once
+        self._suppress_engaged_script_once = False
         script = self._pending_idle_script
-        if script is None:
+        if silent_presence_entry:
+            script = None
+        elif script is None:
             now = datetime.now()
             script = self._script_engine.select_idle_script(now=now) or self._asset_manager.get_idle_script_for_time(now)
             if script:
@@ -518,8 +558,9 @@ class Director(QObject):
         if self._behavior_mode != BehaviorMode.SUMMONING:
             self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
         self._apply_behavior_mode_visual()
-        self._set_entity_autonomous(True)
-        self._auto_dismiss_timer.start(self._auto_dismiss_ms)
+        self._set_entity_autonomous(not silent_presence_entry)
+        if not silent_presence_entry:
+            self._auto_dismiss_timer.start(self._auto_dismiss_ms)
 
     def _enter_fleeing(self) -> None:
         self._stop_auto_dismiss_timer()
@@ -544,12 +585,14 @@ class Director(QObject):
     @Slot(int)
     def _on_idle_time_updated(self, idle_ms: int) -> None:
         self._latest_idle_time_ms = int(idle_ms)
+        self._refresh_presence_state()
 
     @Slot(object)
     def _on_gaze_updated(self, gaze_data: object) -> None:
         if not isinstance(gaze_data, GazeData):
             return
         self._latest_gaze_data = gaze_data
+        self._refresh_presence_state()
         self._maybe_trigger_no_face_test(gaze_data)
         self._track_expression_state(gaze_data)
         self._maybe_trigger_sad_comfort(gaze_data)
@@ -568,6 +611,11 @@ class Director(QObject):
         self._camera_enabled = False
         self._reset_no_face_tracker()
         self._latest_gaze_data = GazeData(face_detected=False)
+        self._latest_presence_state = PresenceState.UNKNOWN
+        self._deep_sleep_active = False
+        self._passive_presence_active = False
+        if self._passive_presence_timer.isActive():
+            self._passive_presence_timer.stop()
         self._stable_expression = "neutral"
         self._expression_votes = {"happy": 0, "neutral": 0, "angry": 0, "sad": 0}
 
@@ -774,6 +822,92 @@ class Director(QObject):
             return ascii_template
         return self._ascii_renderer.apply_eye_tracking(ascii_template, self._latest_gaze_data.face_x, eye_width=5)
 
+    def _refresh_presence_state(self) -> None:
+        gaze_for_presence = self._latest_gaze_data if self._camera_enabled else None
+        state = self._presence_detector.determine_presence(self._latest_idle_time_ms, gaze_for_presence)
+        if state == self._latest_presence_state:
+            return
+        self._latest_presence_state = state
+        self.LOGGER.debug(
+            "[Presence] state=%s idle_ms=%s face=%s",
+            state.name,
+            self._latest_idle_time_ms,
+            bool(gaze_for_presence and gaze_for_presence.face_detected),
+        )
+        self._apply_presence_state(state)
+
+    def _apply_presence_state(self, state: PresenceState) -> None:
+        if state == PresenceState.UNKNOWN:
+            return
+        if state == PresenceState.PRESENT_ACTIVE:
+            self._on_presence_back_active()
+            return
+        if self._voice_trajectory_playing:
+            return
+        if state == PresenceState.PRESENT_PASSIVE:
+            self._enter_passive_companion()
+            return
+        if state == PresenceState.ABSENT:
+            self._enter_deep_sleep()
+
+    def _enter_passive_companion(self) -> None:
+        current_state = self._state_machine.current_state
+        if current_state == EntityState.HIDDEN:
+            self._suppress_engaged_script_once = True
+            self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
+            if not self._state_machine.transition_to(EntityState.ENGAGED):
+                self._suppress_engaged_script_once = False
+                return
+            current_state = self._state_machine.current_state
+        if current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
+            return
+        if self._resolve_effective_behavior_mode() != BehaviorMode.IDLE:
+            return
+        self._deep_sleep_active = False
+        self._passive_presence_active = True
+        self._stop_auto_dismiss_timer()
+        self._set_entity_autonomous(False)
+        self._set_entity_state("state5", as_base=False)
+        self._passive_presence_timer.start(self.PASSIVE_COMPANION_DURATION_MS)
+
+    def _enter_deep_sleep(self) -> None:
+        if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
+            return
+        self._passive_presence_active = False
+        if self._passive_presence_timer.isActive():
+            self._passive_presence_timer.stop()
+        self._deep_sleep_active = True
+        self._stop_auto_dismiss_timer()
+        self._set_entity_autonomous(False)
+        self._set_behavior_mode(BehaviorMode.BUSY, apply_visual=False)
+        if not self._set_entity_state("sleep", as_base=False):
+            self._set_entity_state("state5", as_base=False)
+
+    def _on_presence_back_active(self) -> None:
+        was_deep_sleep = self._deep_sleep_active
+        self._deep_sleep_active = False
+        if self._passive_presence_active:
+            self._passive_presence_active = False
+            if self._passive_presence_timer.isActive():
+                self._passive_presence_timer.stop()
+        if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
+            return
+        if self._resolve_effective_behavior_mode() != BehaviorMode.IDLE:
+            return
+        if was_deep_sleep:
+            if not self._set_entity_state("state2", as_base=False):
+                self._set_entity_state("state1", as_base=False)
+            self._set_entity_autonomous(True)
+            self._auto_dismiss_timer.start(self._auto_dismiss_ms)
+
+    @Slot()
+    def _on_passive_presence_timeout(self) -> None:
+        if not self._passive_presence_active:
+            return
+        self._passive_presence_active = False
+        if self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED):
+            self._state_machine.transition_to(EntityState.HIDDEN)
+
     def _track_expression_state(self, gaze_data: GazeData) -> None:
         if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
             return
@@ -799,6 +933,12 @@ class Director(QObject):
 
         self._stable_expression = winner
         self._last_expression_visual_at = now
+        target_state = self.EXPRESSION_STATE_MAP.get(winner)
+        if target_state:
+            self._set_entity_state(target_state, as_base=False)
+        mood_delta = float(self.EXPRESSION_MOOD_DELTA.get(winner, 0.0))
+        if mood_delta:
+            self._mood_system.apply_delta(mood_delta)
         self.LOGGER.debug("[Vision] Stable expression=%s score=%s", winner, self._expression_votes[winner])
 
     def _maybe_trigger_sad_comfort(self, gaze_data: GazeData) -> None:

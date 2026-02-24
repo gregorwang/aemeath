@@ -255,40 +255,62 @@ class ScreenCommentator:
 
     def _image_to_base64(self, image: np.ndarray) -> str:
         """Convert numpy screenshot to base64 JPEG for Vision LLM."""
-        try:
-            from PIL import Image
-        except ImportError:
-            return ""
-
         if image.size <= 4:
             return ""
 
         try:
-            # Convert BGRA -> RGB
-            if len(image.shape) == 3 and image.shape[2] == 4:
-                rgb = image[:, :, [2, 1, 0]]
-            elif len(image.shape) == 3 and image.shape[2] == 3:
-                rgb = image[:, :, [2, 1, 0]]
+            import cv2  # type: ignore
+
+            img = np.asarray(image)
+            if img.ndim == 2:
+                bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            elif img.ndim == 3 and img.shape[2] >= 3:
+                bgr = img[:, :, :3]
             else:
-                rgb = image
+                return ""
 
-            pil_image = Image.fromarray(rgb)
+            h, w = int(bgr.shape[0]), int(bgr.shape[1])
+            if h <= 0 or w <= 0:
+                return ""
 
-            # Resize to save bandwidth while preserving enough detail
-            w, h = pil_image.size
-            max_dim = self.VISION_MAX_DIMENSION
-            if max(w, h) > max_dim:
-                scale = max_dim / max(w, h)
-                pil_image = pil_image.resize(
-                    (int(w * scale), int(h * scale)),
-                    Image.Resampling.LANCZOS,
-                )
+            max_dim = int(self.VISION_MAX_DIMENSION)
+            if max_dim > 0 and max(w, h) > max_dim:
+                scale = max_dim / float(max(w, h))
+                target_w = max(1, int(w * scale))
+                target_h = max(1, int(h * scale))
+                bgr = cv2.resize(bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-            buf = io.BytesIO()
-            pil_image.save(buf, format="JPEG", quality=75)
-            return base64.b64encode(buf.getvalue()).decode("ascii")
+            ok, encoded = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            if not ok:
+                return ""
+            return base64.b64encode(encoded.tobytes()).decode("ascii")
         except Exception:
-            return ""
+            # Fallback path for environments without OpenCV runtime.
+            try:
+                from PIL import Image
+
+                if len(image.shape) == 3 and image.shape[2] == 4:
+                    rgb = image[:, :, [2, 1, 0]]
+                elif len(image.shape) == 3 and image.shape[2] == 3:
+                    rgb = image[:, :, [2, 1, 0]]
+                else:
+                    rgb = image
+
+                pil_image = Image.fromarray(rgb)
+                w, h = pil_image.size
+                max_dim = self.VISION_MAX_DIMENSION
+                if max(w, h) > max_dim:
+                    scale = max_dim / max(w, h)
+                    pil_image = pil_image.resize(
+                        (int(w * scale), int(h * scale)),
+                        Image.Resampling.LANCZOS,
+                    )
+
+                buf = io.BytesIO()
+                pil_image.save(buf, format="JPEG", quality=75)
+                return base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                return ""
 
     # ─── Screenshot Capture ───────────────────────────────────────
 

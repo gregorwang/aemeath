@@ -18,6 +18,8 @@ class GazeData:
     confidence: float = 0.0
     emotion_label: str = "neutral"  # happy / neutral / angry / sad / unknown
     emotion_score: float = 0.0
+    brightness: float = 0.0
+    motion_score: float = 0.0
 
 
 class GazeTracker(QThread):
@@ -97,6 +99,7 @@ class GazeTracker(QThread):
         logger.info("[Vision] Camera tracking started (index=%s, fps=%s)", self._camera_index, self._target_fps)
         self.camera_state_changed.emit(True)
         try:
+            prev_gray = None
             while self._running:
                 start_ts = time.perf_counter()
                 ret, frame = cap.read()
@@ -104,14 +107,32 @@ class GazeTracker(QThread):
                     time.sleep(frame_interval)
                     continue
 
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray = cv2.equalizeHist(gray)
+                brightness = float(cv2.mean(gray)[0])
+                motion_score = 0.0
+                if prev_gray is not None:
+                    diff = cv2.absdiff(prev_gray, gray)
+                    motion_score = float(cv2.mean(diff)[0])
+                prev_gray = gray
+                rgb_frame = cv2.cvtColor(cv2.merge([gray, gray, gray]), cv2.COLOR_BGR2RGB)
                 results = face_mesh.process(rgb_frame)
 
                 if results.multi_face_landmarks:
                     landmarks = results.multi_face_landmarks[0]
-                    gaze_data = self._calculate_gaze(landmarks)
+                    gaze_data = self._calculate_gaze(
+                        landmarks,
+                        brightness=brightness,
+                        motion_score=motion_score,
+                    )
                 else:
-                    gaze_data = GazeData(face_detected=False, emotion_label="unknown", emotion_score=0.0)
+                    gaze_data = GazeData(
+                        face_detected=False,
+                        emotion_label="unknown",
+                        emotion_score=0.0,
+                        brightness=brightness,
+                        motion_score=motion_score,
+                    )
 
                 self.gaze_updated.emit(gaze_data)
 
@@ -125,7 +146,7 @@ class GazeTracker(QThread):
             logger.info("[Vision] Camera tracking stopped")
             self.camera_state_changed.emit(False)
 
-    def _calculate_gaze(self, landmarks: Any) -> GazeData:
+    def _calculate_gaze(self, landmarks: Any, *, brightness: float = 0.0, motion_score: float = 0.0) -> GazeData:
         import numpy as np
 
         nose = landmarks.landmark[self.NOSE_TIP]
@@ -140,6 +161,8 @@ class GazeTracker(QThread):
             confidence=float(np.clip(confidence, 0.0, 1.0)),
             emotion_label=emotion_label,
             emotion_score=emotion_score,
+            brightness=max(0.0, float(brightness)),
+            motion_score=max(0.0, float(motion_score)),
         )
 
     @staticmethod

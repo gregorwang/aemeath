@@ -32,6 +32,15 @@ class MoodSystemTest(unittest.TestCase):
         low.natural_decay()
         self.assertGreater(low.mood, 0.1)
 
+    def test_apply_delta_clamps_bounds(self) -> None:
+        mood = MoodSystem(initial_mood=0.5)
+        mood.apply_delta(0.3)
+        self.assertAlmostEqual(mood.mood, 0.8, places=3)
+        mood.apply_delta(1.0)
+        self.assertAlmostEqual(mood.mood, 1.0, places=3)
+        mood.apply_delta(-2.0)
+        self.assertAlmostEqual(mood.mood, 0.0, places=3)
+
     def test_mood_label(self) -> None:
         mood = MoodSystem(initial_mood=0.85)
         self.assertEqual(mood.mood_label, "兴奋")
@@ -39,4 +48,3 @@ class MoodSystemTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

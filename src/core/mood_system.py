@@ -34,9 +34,11 @@ class MoodSystem:
     def on_engaged(self) -> None:
         self._mood = min(1.0, self._mood + 0.15)
 
+    def apply_delta(self, delta: float) -> None:
+        self._mood = max(0.0, min(1.0, self._mood + float(delta)))
+
     def natural_decay(self) -> None:
         if self._mood > 0.5:
             self._mood = max(0.5, self._mood - 0.02)
         elif self._mood < 0.5:
             self._mood = min(0.5, self._mood + 0.02)
-

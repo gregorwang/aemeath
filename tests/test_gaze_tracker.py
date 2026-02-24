@@ -68,6 +68,17 @@ class GazeTrackerTest(unittest.TestCase):
         self.assertLessEqual(gaze.face_y, 1.0)
         self.assertGreater(gaze.confidence, 0.0)
         self.assertIn(gaze.emotion_label, {"happy", "neutral", "angry", "sad"})
+        self.assertEqual(gaze.brightness, 0.0)
+        self.assertEqual(gaze.motion_score, 0.0)
+
+    def test_calculate_gaze_preserves_frame_metrics(self) -> None:
+        tracker = GazeTracker()
+        landmarks = _FakeLandmarks(0.40, 0.60)
+
+        gaze = tracker._calculate_gaze(landmarks, brightness=42.5, motion_score=3.2)
+
+        self.assertAlmostEqual(gaze.brightness, 42.5, places=3)
+        self.assertAlmostEqual(gaze.motion_score, 3.2, places=3)
 
 
 if __name__ == "__main__":

@@ -34,7 +34,32 @@ class PresenceDetectorTest(unittest.TestCase):
         state = detector.determine_presence(100_000, None)
         self.assertEqual(state, PresenceState.UNKNOWN)
 
+    def test_absent_when_no_face_and_motion_still_for_long(self) -> None:
+        detector = PresenceDetector()
+        detector.FACE_ABSENT_FRAMES = 999
+        gaze = GazeData(face_detected=False, motion_score=0.5, brightness=120.0)
+        for _ in range(detector.STILL_NO_FACE_FRAMES):
+            state = detector.determine_presence(360_000, gaze)
+        self.assertEqual(state, PresenceState.ABSENT)
+
+    def test_absent_when_no_face_and_dark_for_long(self) -> None:
+        detector = PresenceDetector()
+        detector.FACE_ABSENT_FRAMES = 999
+        gaze = GazeData(face_detected=False, motion_score=10.0, brightness=10.0)
+        max_frames = max(detector.DARK_NO_FACE_FRAMES, 500)
+        for _ in range(max_frames):
+            state = detector.determine_presence(360_000, gaze)
+        self.assertEqual(state, PresenceState.ABSENT)
+
+    def test_stillness_threshold_can_trigger_earlier_than_face_absent_baseline(self) -> None:
+        detector = PresenceDetector()
+        detector.FACE_ABSENT_FRAMES = 999
+        gaze = GazeData(face_detected=False, motion_score=0.2, brightness=120.0)
+        state = PresenceState.UNKNOWN
+        for _ in range(detector.STILL_NO_FACE_FRAMES):
+            state = detector.determine_presence(360_000, gaze)
+        self.assertEqual(state, PresenceState.ABSENT)
+
 
 if __name__ == "__main__":
     unittest.main()
-

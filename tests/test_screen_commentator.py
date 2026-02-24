@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -106,6 +108,47 @@ class ScreenCommentatorTest(unittest.IsolatedAsyncioTestCase):
         high = commentator._build_vision_system_prompt(0.9)
         self.assertIn("生气", low)
         self.assertIn("粘人", high)
+
+    def test_image_to_base64_prefers_cv2_resize_and_imencode(self) -> None:
+        audio = _FakeAudio()
+        commentator = ScreenCommentator(
+            llm_provider=DummyProvider(),
+            audio_manager=audio,  # type: ignore[arg-type]
+        )
+        large_bgr = np.zeros((2200, 1800, 3), dtype=np.uint8)
+        calls = {"resize": 0, "imencode": 0}
+
+        fake_cv2 = types.ModuleType("cv2")
+        fake_cv2.IMWRITE_JPEG_QUALITY = 1
+        fake_cv2.INTER_AREA = 3
+        fake_cv2.COLOR_GRAY2BGR = 8
+
+        def _resize(image, size, interpolation=None):
+            _ = interpolation
+            calls["resize"] += 1
+            w, h = int(size[0]), int(size[1])
+            return np.zeros((h, w, 3), dtype=np.uint8)
+
+        def _imencode(ext, image, params=None):
+            _ = (ext, image, params)
+            calls["imencode"] += 1
+            return True, np.frombuffer(b"jpeg-bytes", dtype=np.uint8)
+
+        def _cvt_color(image, _code):
+            if image.ndim == 2:
+                return np.stack([image, image, image], axis=-1)
+            return image
+
+        fake_cv2.resize = _resize  # type: ignore[attr-defined]
+        fake_cv2.imencode = _imencode  # type: ignore[attr-defined]
+        fake_cv2.cvtColor = _cvt_color  # type: ignore[attr-defined]
+
+        with patch.dict(sys.modules, {"cv2": fake_cv2}):
+            b64 = commentator._image_to_base64(large_bgr)
+
+        self.assertTrue(b64)
+        self.assertEqual(calls["resize"], 1)
+        self.assertEqual(calls["imencode"], 1)
 
 
 if __name__ == "__main__":
