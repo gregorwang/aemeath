@@ -11,6 +11,15 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
+## Test (Development)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+pytest tests/ -v --tb=short
+```
+
 ## Build (PyInstaller)
 
 ```powershell

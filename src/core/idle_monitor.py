@@ -107,7 +107,16 @@ class IdleMonitor(QThread):
 
         try:
             if self._has_tick64:
-                current_tick = int(self._kernel32.GetTickCount64()) & 0xFFFFFFFF
+                current_tick = int(self._kernel32.GetTickCount64())
+                idle_time = current_tick - int(lii.dwTime)
+                # dwTime is 32-bit tick count; align current 64-bit tick low bits
+                # to avoid wrap mismatch when system uptime is long.
+                if idle_time < 0 or idle_time > 0xFFFFFFFF:
+                    current_tick_low = current_tick & 0xFFFFFFFF
+                    idle_time = current_tick_low - int(lii.dwTime)
+                    if idle_time < 0:
+                        idle_time += 0x100000000
+                return max(0, int(idle_time))
             else:
                 current_tick = int(self._kernel32.GetTickCount())
         except Exception:

@@ -20,6 +20,7 @@ reacts by spawning appropriate GIF particles.
 
 from __future__ import annotations
 
+import logging
 import random
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,8 @@ try:
     from ui.gif_particle import GifParticleManager, ParticleConfig
 except ModuleNotFoundError:
     from ..ui.gif_particle import GifParticleManager, ParticleConfig
+
+logger = logging.getLogger("CyberCompanion")
 
 
 class GifStateMapper(QObject):
@@ -77,7 +80,7 @@ class GifStateMapper(QObject):
             if path.exists():
                 self._gif_paths[role] = str(path)
             else:
-                print(f"[GifStateMapper] GIF 未找到: {path} (role={role})")
+                logger.warning("[GifStateMapper] GIF 未找到: %s (role=%s)", path, role)
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable or disable particle effects."""
@@ -188,7 +191,7 @@ class GifStateMapper(QObject):
             return
 
         self._audio_reaction_active = True
-        print("[GifStateMapper] 🎵 音频检测到，开始音乐律动效果")
+        logger.info("[GifStateMapper] 音频检测到，开始音乐律动效果")
 
         # Spawn initial music vibe particles
         music_path = self._gif_paths.get("music_vibe")
@@ -210,7 +213,7 @@ class GifStateMapper(QObject):
     def on_audio_stopped(self) -> None:
         """Called when system audio output stops."""
         self._stop_audio_reaction()
-        print("[GifStateMapper] 🔇 音频停止，结束律动效果")
+        logger.info("[GifStateMapper] 音频停止，结束律动效果")
 
     def _stop_audio_reaction(self) -> None:
         """Stop the periodic music pulse."""

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from enum import Enum, auto
 from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
+
+logger = logging.getLogger("CyberCompanion")
 
 
 class EntityState(Enum):
@@ -54,7 +57,7 @@ class StateMachine(QObject):
             return True
         allowed = self.VALID_TRANSITIONS.get(self._current_state, [])
         if new_state not in allowed:
-            print(f"[FSM] 非法状态转换: {self._current_state.name} -> {new_state.name}")
+            logger.warning("[FSM] 非法状态转换: %s -> %s", self._current_state.name, new_state.name)
             return False
 
         old_state = self._current_state
@@ -70,6 +73,5 @@ class StateMachine(QObject):
             enter_fn()
 
         self.state_changed.emit(old_state, new_state)
-        print(f"[FSM] 状态转换: {old_state.name} -> {new_state.name}")
+        logger.info("[FSM] 状态转换: %s -> %s", old_state.name, new_state.name)
         return True
-

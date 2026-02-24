@@ -15,4 +15,3 @@ PyAudio>=0.2.14,<0.3.0
 rapidfuzz>=3.9.0,<4.0.0
 pycaw>=20230407
 comtypes>=1.2.0
-pytest>=8.0.0,<10.0.0

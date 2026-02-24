@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import logging
 
-try:
-    from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot  # type: ignore[attr-defined]
-except ImportError:  # pragma: no cover
-    try:
-        from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot  # type: ignore[attr-defined]
-    except ImportError:
-        from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
 logger = logging.getLogger("CyberCompanion")
 

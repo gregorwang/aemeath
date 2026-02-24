@@ -174,6 +174,61 @@ class ConfigManager:
         return True
 
     @staticmethod
+    def migrate_legacy_asr_defaults(config: AppConfig) -> bool:
+        provider = str(getattr(config.audio, "asr_provider", "") or "").strip().lower()
+        model = str(getattr(config.audio, "asr_model", "") or "").strip().lower()
+        base_url = str(getattr(config.audio, "asr_base_url", "") or "").strip().lower().rstrip("/")
+        api_key = str(getattr(config.audio, "asr_api_key", "") or "").strip()
+        voice_mode = str(getattr(config.audio, "voice_input_mode", "") or "").strip().lower()
+        changed = False
+
+        legacy_provider = provider in {"", "xai_realtime"}
+        legacy_model = model in {"", "grok-2-mini-transcribe", "whisper-1"}
+        legacy_base = base_url in {"", "https://api.x.ai/v1"}
+        legacy_mode = voice_mode in {"", "continuous"}
+
+        if legacy_provider and legacy_model and legacy_base and legacy_mode and not api_key:
+            config.audio.voice_input_mode = "push_to_talk"
+            config.audio.asr_provider = "zhipu_asr"
+            config.audio.asr_model = "glm-asr-2512"
+            config.audio.asr_base_url = "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
+            changed = True
+
+        # Handle partially migrated configs where provider is zhipu but model/base are still xAI defaults.
+        if provider == "zhipu_asr":
+            if model in {"", "grok-2-mini-transcribe", "whisper-1"}:
+                config.audio.asr_model = "glm-asr-2512"
+                changed = True
+            if base_url in {"", "https://api.x.ai/v1"} or "x.ai" in base_url:
+                config.audio.asr_base_url = "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions"
+                changed = True
+
+        return changed
+
+    @staticmethod
+    def migrate_legacy_llm_defaults(config: AppConfig) -> bool:
+        provider = str(getattr(config.llm, "provider", "") or "").strip().lower()
+        model = str(getattr(config.llm, "model", "") or "").strip().lower()
+        base_url = str(getattr(config.llm, "base_url", "") or "").strip().lower().rstrip("/")
+        changed = False
+
+        if provider == "xai":
+            if model in {"", "grok-4-fast-reasoning", "grok-4-fast"}:
+                config.llm.model = "grok-4-latest"
+                changed = True
+            if base_url in {"", "https://api.x.ai/v1"}:
+                config.llm.base_url = "https://api.x.ai"
+                changed = True
+
+        return changed
+
+    @staticmethod
+    def migrate_legacy_defaults(config: AppConfig) -> bool:
+        asr_changed = ConfigManager.migrate_legacy_asr_defaults(config)
+        llm_changed = ConfigManager.migrate_legacy_llm_defaults(config)
+        return asr_changed or llm_changed
+
+    @staticmethod
     def to_dict(config: AppConfig) -> dict[str, Any]:
         return {
             "version": str(config.version),

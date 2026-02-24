@@ -20,6 +20,7 @@ python src/main.py
 ```
 - Run test suite (same runner style as CI):
 ```powershell
+pip install -r requirements-dev.txt
 pytest tests/ -v --tb=short
 ```
 - Build distributable with PyInstaller:

@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
 from .asset_manager import AssetManager, Script
@@ -71,9 +71,37 @@ class ScriptedEntranceError(RuntimeError):
     """Raised when scripted summon trajectory is required but unavailable/invalid."""
 
 
+class _ScreenCommentaryWorker(QObject):
+    completed = Signal(str)
+    skipped = Signal(str)
+    failed = Signal(str)
+    done = Signal()
+
+    def __init__(self, *, resource_scheduler: ResourceScheduler, screen_commentator: ScreenCommentator, mood_value: float):
+        super().__init__()
+        self._resource_scheduler = resource_scheduler
+        self._screen_commentator = screen_commentator
+        self._mood_value = float(mood_value)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            plan = self._resource_scheduler.resolve_plan(is_fullscreen=False, user_dialog_active=True)
+            if not plan.llm_running:
+                self.skipped.emit("llm_running=false")
+                return
+            text = self._screen_commentator.comment_on_screen_sync(mood_value=self._mood_value)
+            self.completed.emit(str(text or ""))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        finally:
+            self.done.emit()
+
+
 class Director(QObject):
     """FSM-based behavior orchestrator with optional Phase 4 AI modules."""
 
+    _entity_state_change_requested = Signal(str, bool)
     VOICE_TRAJECTORY_FILE = "trajectory_1771029879_qt_animation.json"
     LOGGER = logging.getLogger("CyberCompanion")
     SAD_COMFORT_TEXT = "别难过"
@@ -165,10 +193,12 @@ class Director(QObject):
         self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
         self._screen_commentary_state_lock = threading.Lock()
         self._screen_commentary_active_count = 0
+        self._screen_commentary_thread: QThread | None = None
+        self._screen_commentary_worker: _ScreenCommentaryWorker | None = None
 
         self._gaze_tracker = gaze_tracker
         if self._camera_enabled and not self._camera_consent:
-            print("[Vision] 摄像头功能已配置为启用，但未授予授权，已自动禁用。")
+            self.LOGGER.warning("[Vision] 摄像头功能已配置为启用，但未授予授权，已自动禁用。")
             self._camera_enabled = False
         if self._gaze_tracker is not None:
             self._gaze_tracker.gaze_updated.connect(self._on_gaze_updated)
@@ -223,6 +253,7 @@ class Director(QObject):
             on_enter=self._enter_fleeing,
             on_exit=self._stop_auto_dismiss_timer,
         )
+        self._entity_state_change_requested.connect(self._on_entity_state_change_requested)
 
         if hasattr(self._entity_window, "flee_completed"):
             self._entity_window.flee_completed.connect(self._on_flee_finished)
@@ -342,44 +373,75 @@ class Director(QObject):
             if self._full_screen_pause and self._is_fullscreen_app_running():
                 self.LOGGER.info("[ScreenCommentary] Auto trigger skipped: fullscreen app running")
                 return
-            with self._screen_commentary_state_lock:
-                if self._screen_commentary_active_count > 0:
-                    self.LOGGER.info("[ScreenCommentary] Auto trigger skipped: previous request still running")
-                    return
+        with self._screen_commentary_state_lock:
+            if self._screen_commentary_active_count > 0:
+                self.LOGGER.info("[ScreenCommentary] Request skipped: previous request still running source=%s", source_name)
+                return
         self.LOGGER.info("[ScreenCommentary] Requested source=%s", source_name)
         self._mood_system.on_engaged()
-        self._set_entity_state("state5", as_base=False)
+        self._set_entity_state_threadsafe("state5", as_base=False)
         try:
             self._screen_commentator.cancel_current_session()
         except Exception:
             pass
         with self._screen_commentary_state_lock:
             self._screen_commentary_active_count += 1
-
-        def _worker() -> None:
-            try:
-                plan = self._resource_scheduler.resolve_plan(is_fullscreen=False, user_dialog_active=True)
-                if not plan.llm_running:
-                    self.LOGGER.info("[ScreenCommentary] Skipped by resource plan: llm_running=false")
-                    self._audio_manager.speak("我现在在省电模式，稍后再看屏幕。", priority=AudioPriority.HIGH)
-                    return
-                text = self._screen_commentator.comment_on_screen_sync(mood_value=self._mood_system.mood)
-                self.LOGGER.info("[ScreenCommentary] Completed: %s", (text or "").strip()[:80])
-            except Exception as exc:
-                self.LOGGER.exception("[ScreenCommentary] Failed: %s", exc)
-                self._audio_manager.speak("我看屏幕失败了，点托盘里的打开日志目录看看。", priority=AudioPriority.HIGH)
-                return
-            finally:
-                self._set_entity_state("state1", as_base=False)
-                with self._screen_commentary_state_lock:
-                    self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
-
         try:
-            threading.Thread(target=_worker, daemon=True).start()
+            self._start_screen_commentary_worker(source_name=source_name)
         except Exception:
             with self._screen_commentary_state_lock:
                 self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
+            self._set_entity_state_threadsafe("state1", as_base=False)
             raise
+
+    def _start_screen_commentary_worker(self, *, source_name: str) -> None:
+        if self._screen_commentator is None:
+            raise RuntimeError("screen_commentator unavailable")
+        thread = QThread(self)
+        worker = _ScreenCommentaryWorker(
+            resource_scheduler=self._resource_scheduler,
+            screen_commentator=self._screen_commentator,
+            mood_value=self._mood_system.mood,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.completed.connect(self._on_screen_commentary_completed)
+        worker.skipped.connect(self._on_screen_commentary_skipped)
+        worker.failed.connect(self._on_screen_commentary_failed)
+        worker.done.connect(self._on_screen_commentary_done)
+        worker.done.connect(thread.quit)
+        worker.done.connect(worker.deleteLater)
+        thread.finished.connect(self._on_screen_commentary_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._screen_commentary_thread = thread
+        self._screen_commentary_worker = worker
+        self.LOGGER.debug("[ScreenCommentary] Worker started source=%s", source_name)
+        thread.start()
+
+    @Slot(str)
+    def _on_screen_commentary_completed(self, text: str) -> None:
+        self.LOGGER.info("[ScreenCommentary] Completed: %s", (text or "").strip()[:80])
+
+    @Slot(str)
+    def _on_screen_commentary_skipped(self, reason: str) -> None:
+        self.LOGGER.info("[ScreenCommentary] Skipped by resource plan: %s", reason or "unknown")
+        self._audio_manager.speak("我现在在省电模式，稍后再看屏幕。", priority=AudioPriority.HIGH)
+
+    @Slot(str)
+    def _on_screen_commentary_failed(self, message: str) -> None:
+        self.LOGGER.error("[ScreenCommentary] Failed: %s", message)
+        self._audio_manager.speak("我看屏幕失败了，点托盘里的打开日志目录看看。", priority=AudioPriority.HIGH)
+
+    @Slot()
+    def _on_screen_commentary_done(self) -> None:
+        self._set_entity_state_threadsafe("state1", as_base=False)
+        with self._screen_commentary_state_lock:
+            self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
+
+    @Slot()
+    def _on_screen_commentary_thread_finished(self) -> None:
+        self._screen_commentary_thread = None
+        self._screen_commentary_worker = None
 
     def summon_now(self) -> bool:
         """
@@ -431,6 +493,11 @@ class Director(QObject):
         self._eye_tracking_enabled = bool(app_config.vision.eye_tracking_enabled)
         self._camera_consent = bool(app_config.vision.camera_consent_granted)
         self._camera_enabled = bool(app_config.vision.camera_enabled) and self._camera_consent
+        if hasattr(self._presence_detector, "set_target_fps"):
+            try:
+                self._presence_detector.set_target_fps(int(app_config.vision.target_fps))
+            except Exception:
+                pass
         if not self._camera_enabled:
             self._stop_camera_tracking()
             self._reset_no_face_tracker()
@@ -490,6 +557,21 @@ class Director(QObject):
         self._stop_camera_tracking()
         if self._audio_output_monitor:
             self._audio_output_monitor.stop()
+        commentary_thread = getattr(self, "_screen_commentary_thread", None)
+        if commentary_thread is not None and commentary_thread.isRunning():
+            try:
+                if self._screen_commentator is not None:
+                    self._screen_commentator.cancel_current_session()
+            except Exception:
+                pass
+            commentary_thread.quit()
+            commentary_thread.wait(1200)
+        screen_commentator = getattr(self, "_screen_commentator", None)
+        if screen_commentator is not None and hasattr(screen_commentator, "shutdown"):
+            try:
+                screen_commentator.shutdown()
+            except Exception:
+                pass
         if self._gif_state_mapper:
             self._gif_state_mapper.shutdown()
         if self._idle_invasion_controller is not None:
@@ -607,7 +689,7 @@ class Director(QObject):
 
     @Slot(str)
     def _on_camera_error(self, message: str) -> None:
-        print(f"[Vision] {message}")
+        self.LOGGER.warning("[Vision] %s", message)
         self._camera_enabled = False
         self._reset_no_face_tracker()
         self._latest_gaze_data = GazeData(face_detected=False)
@@ -808,6 +890,17 @@ class Director(QObject):
             return bool(self._entity_window.set_state_by_name(state_name, as_base=as_base))
         except Exception:
             return False
+
+    @Slot(str, bool)
+    def _on_entity_state_change_requested(self, state_name: str, as_base: bool) -> None:
+        self._set_entity_state(state_name, as_base=as_base)
+
+    def _set_entity_state_threadsafe(self, state_name: str, *, as_base: bool = True) -> bool:
+        target_thread = self.thread()
+        if target_thread is None or QThread.currentThread() is target_thread:
+            return self._set_entity_state(state_name, as_base=as_base)
+        self._entity_state_change_requested.emit(state_name, as_base)
+        return True
 
     def _set_entity_autonomous(self, enabled: bool) -> None:
         if not hasattr(self._entity_window, "set_autonomous_enabled"):

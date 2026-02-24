@@ -10,9 +10,10 @@ with its own entrance/exit animation.
 
 from __future__ import annotations
 
+import json
+import logging
 import random
 from dataclasses import dataclass
-import json
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -33,6 +34,8 @@ try:
     from ui._file_helpers import normalize_asset_path, path_exists
 except ModuleNotFoundError:
     from ._file_helpers import normalize_asset_path, path_exists
+
+logger = logging.getLogger("CyberCompanion")
 
 
 @dataclass
@@ -98,7 +101,7 @@ class GifParticle(QWidget):
     def _setup_gif(self) -> None:
         source = normalize_asset_path(self._config.gif_path)
         if not path_exists(source):
-            print(f"[GifParticle] GIF 文件未找到: {self._config.gif_path}")
+            logger.warning("[GifParticle] GIF 文件未找到: %s", self._config.gif_path)
             return
 
         label = QLabel(self)
@@ -107,7 +110,7 @@ class GifParticle(QWidget):
 
         movie = QMovie(source)
         if not movie.isValid():
-            print(f"[GifParticle] 无效的 GIF: {source}")
+            logger.warning("[GifParticle] 无效的 GIF: %s", source)
             return
 
         movie.setCacheMode(QMovie.CacheMode.CacheAll)
@@ -558,14 +561,14 @@ class GifParticleManager(QWidget):
         """
         path = Path(json_path)
         if not path.exists():
-            print(f"[GifParticle] Trajectory file missing: {path}")
+            logger.warning("[GifParticle] Trajectory file missing: %s", path)
             return
             
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
-            print(f"[GifParticle] Failed to load trajectory: {e}")
+            logger.warning("[GifParticle] Failed to load trajectory: %s", e)
             return
 
         player = TrajectoryPlayer(data, gif_map)
@@ -586,7 +589,7 @@ class GifParticleManager(QWidget):
         Returns the particle_id or None if at capacity.
         """
         if len(self._active_particles) >= self.MAX_CONCURRENT:
-            print(f"[GifParticleManager] 已达最大并发数 {self.MAX_CONCURRENT}，跳过")
+            logger.info("[GifParticleManager] 已达最大并发数 %s，跳过", self.MAX_CONCURRENT)
             return None
 
         pid = self._next_id

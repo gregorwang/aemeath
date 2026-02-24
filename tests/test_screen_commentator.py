@@ -151,5 +151,29 @@ class ScreenCommentatorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["imencode"], 1)
 
 
+class ScreenCommentatorSyncLoopTest(unittest.TestCase):
+    def test_comment_on_screen_sync_reuses_background_loop(self) -> None:
+        audio = _FakeAudio()
+        commentator = ScreenCommentator(
+            llm_provider=_VisionProvider(),
+            audio_manager=audio,  # type: ignore[arg-type]
+        )
+        commentator._capture_active_window = lambda: np.zeros((10, 10, 3), dtype=np.uint8)  # type: ignore[method-assign]
+        commentator._image_to_base64 = lambda _img: "base64-image"  # type: ignore[method-assign]
+
+        try:
+            text_a = commentator.comment_on_screen_sync(mood_value=0.5)
+            first_thread = commentator._sync_loop_thread
+            text_b = commentator.comment_on_screen_sync(mood_value=0.6)
+            second_thread = commentator._sync_loop_thread
+        finally:
+            commentator.shutdown()
+
+        self.assertIn("写代码", text_a)
+        self.assertIn("写代码", text_b)
+        self.assertIsNotNone(first_thread)
+        self.assertIs(first_thread, second_thread)
+
+
 if __name__ == "__main__":
     unittest.main()

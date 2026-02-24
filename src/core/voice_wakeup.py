@@ -865,7 +865,7 @@ class VoiceWakeupListener(QThread):
             try:
                 audio = recognizer.listen(source, timeout=timeout_s, phrase_time_limit=phrase_limit_s)
             except sr.WaitTimeoutError as exc:
-                raise WakeupRecognitionError("等待语音输入超时，请按 B 后尽快说话。") from exc
+                raise WakeupRecognitionError("等待语音输入超时，请按 Ctrl+B 后尽快说话。") from exc
 
         try:
             return helper._recognize(audio=audio, recognizer=recognizer).strip()

@@ -255,7 +255,7 @@ class SettingsDialog(QDialog):
         self.wakeup_enabled_checkbox = QCheckBox("启用语音唤醒词", self)
         self.voice_input_mode_combo = QComboBox(self)
         self.voice_input_mode_combo.addItem("continuous（后台连续唤醒）", "continuous")
-        self.voice_input_mode_combo.addItem("push_to_talk（按全局 B 键单次转写）", "push_to_talk")
+        self.voice_input_mode_combo.addItem("push_to_talk（按全局 Ctrl+B 单次转写）", "push_to_talk")
         self.wakeup_phrases_edit = QLineEdit(self)
         self.wakeup_phrases_edit.setPlaceholderText("多个唤醒词请用英文逗号分隔")
         self.wakeup_language_edit = QLineEdit(self)
@@ -299,7 +299,7 @@ class SettingsDialog(QDialog):
                 "提示: 麦克风无权限或依赖缺失会自动降级。"
                 "\n提示: 摄像头不是常亮，只有角色出现/互动时才会短时启用。"
                 "\n提示: 屏幕识别失败可在托盘菜单点“打开日志目录”，日志文件名为 app.log。"
-                "\n提示: push_to_talk 模式下可按全局 B 键进行单次语音转写。"
+                "\n提示: push_to_talk 模式下可按全局 Ctrl+B 进行单次语音转写。"
                 "\n提示: 推荐 ASR=zhipu_asr（云端）或 xai_realtime。",
                 voice_tab,
             )
@@ -380,7 +380,7 @@ class SettingsDialog(QDialog):
         self.voice_input_mode_combo.setToolTip(
             "语音输入模式:\n"
             "- continuous: 后台持续监听，支持唤醒词\n"
-            "- push_to_talk: 按全局 B 键触发一次转写，资源占用更低"
+            "- push_to_talk: 按全局 Ctrl+B 触发一次转写，资源占用更低"
         )
         self.wakeup_enabled_checkbox.setToolTip("仅在 continuous 模式下有意义，用于语音唤醒角色。")
         self.wakeup_phrases_edit.setToolTip("多个唤醒词用英文逗号分隔，例如: 小爱同学, 你好助手")

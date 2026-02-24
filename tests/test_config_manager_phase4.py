@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from core.config_manager import ConfigManager
+from core.config_manager import AppConfig, ConfigManager
 
 
 class ConfigManagerPhase4Test(unittest.TestCase):
@@ -118,6 +118,39 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             manager = ConfigManager(cfg_path)
             loaded = manager.load()
             self.assertEqual(loaded.idle_invasion.retreat_style, "scatter")
+
+    def test_migrate_legacy_asr_defaults_upgrades_xai_defaults(self) -> None:
+        config = AppConfig()
+        config.audio.voice_input_mode = "continuous"
+        config.audio.asr_provider = "xai_realtime"
+        config.audio.asr_model = "whisper-1"
+        config.audio.asr_base_url = "https://api.x.ai/v1"
+        config.audio.asr_api_key = ""
+
+        changed = ConfigManager.migrate_legacy_asr_defaults(config)
+
+        self.assertTrue(changed)
+        self.assertEqual(config.audio.voice_input_mode, "push_to_talk")
+        self.assertEqual(config.audio.asr_provider, "zhipu_asr")
+        self.assertEqual(config.audio.asr_model, "glm-asr-2512")
+        self.assertEqual(config.audio.asr_base_url, "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions")
+
+    def test_migrate_legacy_defaults_combines_asr_and_llm(self) -> None:
+        config = AppConfig()
+        config.audio.voice_input_mode = "continuous"
+        config.audio.asr_provider = "xai_realtime"
+        config.audio.asr_model = "grok-2-mini-transcribe"
+        config.audio.asr_base_url = "https://api.x.ai/v1"
+        config.llm.provider = "xai"
+        config.llm.model = "grok-4-fast"
+        config.llm.base_url = "https://api.x.ai/v1"
+
+        changed = ConfigManager.migrate_legacy_defaults(config)
+
+        self.assertTrue(changed)
+        self.assertEqual(config.audio.asr_provider, "zhipu_asr")
+        self.assertEqual(config.llm.model, "grok-4-latest")
+        self.assertEqual(config.llm.base_url, "https://api.x.ai")
 
 
 if __name__ == "__main__":

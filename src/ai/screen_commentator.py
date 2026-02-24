@@ -66,6 +66,10 @@ class ScreenCommentator:
         self._preamble_text = (preamble_text or "").strip()
         self._session_lock = threading.Lock()
         self._active_session_id = 0
+        self._sync_loop_lock = threading.Lock()
+        self._sync_loop: asyncio.AbstractEventLoop | None = None
+        self._sync_loop_thread: threading.Thread | None = None
+        self._sync_loop_ready = threading.Event()
 
     def set_llm_provider(self, llm_provider: LLMProvider) -> None:
         self._llm = llm_provider
@@ -142,7 +146,24 @@ class ScreenCommentator:
         return fallback
 
     def comment_on_screen_sync(self, mood_value: float = 0.5) -> str:
-        return asyncio.run(self.comment_on_screen(mood_value=mood_value))
+        loop = self._ensure_sync_loop()
+        future = asyncio.run_coroutine_threadsafe(self.comment_on_screen(mood_value=mood_value), loop)
+        return str(future.result())
+
+    def shutdown(self) -> None:
+        with self._sync_loop_lock:
+            loop = self._sync_loop
+            thread = self._sync_loop_thread
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.5)
+
+    def __del__(self) -> None:
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     # ─── Vision LLM ──────────────────────────────────────────────
 
@@ -400,3 +421,44 @@ class ScreenCommentator:
         if base_url:
             parts.append(f"base={base_url}")
         return ", ".join(parts)
+
+    def _ensure_sync_loop(self) -> asyncio.AbstractEventLoop:
+        with self._sync_loop_lock:
+            if self._sync_loop is not None and self._sync_loop.is_running():
+                return self._sync_loop
+            if self._sync_loop_thread is not None and self._sync_loop_thread.is_alive():
+                # Wait for in-flight startup from another caller.
+                pass
+            else:
+                self._sync_loop_ready.clear()
+                thread = threading.Thread(target=self._sync_loop_main, name="ScreenCommentaryLoop", daemon=True)
+                self._sync_loop_thread = thread
+                thread.start()
+
+        self._sync_loop_ready.wait(timeout=2.0)
+        with self._sync_loop_lock:
+            if self._sync_loop is None:
+                raise RuntimeError("Failed to initialize ScreenCommentary sync event loop")
+            return self._sync_loop
+
+    def _sync_loop_main(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        with self._sync_loop_lock:
+            self._sync_loop = loop
+            self._sync_loop_ready.set()
+        try:
+            loop.run_forever()
+        finally:
+            try:
+                pending = asyncio.all_tasks(loop=loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+            loop.close()
+            with self._sync_loop_lock:
+                self._sync_loop = None
+                self._sync_loop_thread = None
