@@ -6,6 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger("CyberCompanion")
 
@@ -86,10 +87,14 @@ class OpenAIProvider(LLMProvider):
         model: str = "gpt-5-mini",
         api_key: Optional[str] = None,
         base_url: str = OFFICIAL_OPENAI_BASE_URL,
+        provider_name: str = "openai",
+        enable_official_fallback: bool = False,
     ):
         self._model = model
         self._api_key = api_key or self._load_api_key()
         self._base_url = self._normalize_base_url(base_url)
+        self._provider_name = (provider_name or "openai").strip().lower()
+        self._enable_official_fallback = bool(enable_official_fallback)
 
     @staticmethod
     def _load_api_key() -> str:
@@ -110,14 +115,19 @@ class OpenAIProvider(LLMProvider):
             if normalized.endswith(suffix):
                 normalized = normalized[: -len(suffix)]
                 break
-        if normalized.endswith("/v1"):
-            return normalized
-        return f"{normalized}/v1"
+        parsed = urlsplit(normalized)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            path = (parsed.path or "").rstrip("/")
+            if not path:
+                path = "/v1"
+            rebuilt = urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+            return rebuilt.rstrip("/")
+        return normalized
 
     def _candidate_base_urls(self) -> list[str]:
         candidates = [self._base_url]
         official = self.OFFICIAL_OPENAI_BASE_URL
-        if self._base_url != official:
+        if self._enable_official_fallback and self._base_url != official:
             candidates.append(official)
         return candidates
 
@@ -151,7 +161,7 @@ class OpenAIProvider(LLMProvider):
             text=text.strip(),
             tokens_used=int(usage),
             latency_ms=latency,
-            provider="openai",
+            provider=self._provider_name,
         )
 
     async def generate_with_image(
@@ -201,7 +211,7 @@ class OpenAIProvider(LLMProvider):
             text=text.strip(),
             tokens_used=int(usage),
             latency_ms=latency,
-            provider="openai",
+            provider=self._provider_name,
         )
 
     async def generate_with_image_stream(
@@ -385,7 +395,7 @@ class OpenAIProvider(LLMProvider):
         return bool(self._api_key)
 
     def get_resource_usage(self) -> dict:
-        return {"provider": "openai_api", "memory_gb": 0.0}
+        return {"provider": f"{self._provider_name}_api", "memory_gb": 0.0}
 
     @staticmethod
     def _extract_message_text(payload: dict) -> str:

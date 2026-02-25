@@ -25,8 +25,12 @@ class _ManualDebugSubject:
         self._voice_trajectory_playing = voice_trajectory_playing
         self._state_machine = _StateMachineStub(state)
         self._suppress_engaged_script_once = False
+        self._camera_enabled = True
+        self._gaze_tracker = object()
+        self._periodic_scan_active = False
         self.sad_comfort_calls = 0
         self.no_face_calls = 0
+        self.periodic_scan_start_calls = 0
         self.summon_calls = 0
 
     def _trigger_sad_comfort(self) -> None:
@@ -39,6 +43,11 @@ class _ManualDebugSubject:
         self.summon_calls += 1
         if self._state_machine.current_state == EntityState.HIDDEN:
             self._state_machine.current_state = EntityState.ENGAGED
+        return True
+
+    def _start_periodic_camera_scan(self, *, source: str, debug_mode: bool) -> bool:
+        _ = (source, debug_mode)
+        self.periodic_scan_start_calls += 1
         return True
 
 
@@ -108,6 +117,30 @@ class DirectorManualDebugTriggerTest(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(subject.summon_calls, 1)
         single_shot.assert_called_once()
+
+    def test_trigger_periodic_camera_check_debug_schedules_callback(self) -> None:
+        subject = _ManualDebugSubject()
+
+        with patch("core.director.QTimer.singleShot") as single_shot:
+            result = Director.trigger_periodic_camera_check_debug(subject, source="test")
+
+        self.assertTrue(result)
+        single_shot.assert_called_once()
+        delay, callback = single_shot.call_args.args
+        self.assertEqual(delay, 0)
+        callback()
+        self.assertEqual(subject.periodic_scan_start_calls, 1)
+
+    def test_trigger_periodic_camera_check_debug_returns_false_when_camera_disabled(self) -> None:
+        subject = _ManualDebugSubject()
+        subject._camera_enabled = False
+
+        with patch("core.director.QTimer.singleShot") as single_shot:
+            result = Director.trigger_periodic_camera_check_debug(subject, source="test")
+
+        self.assertFalse(result)
+        single_shot.assert_not_called()
+        self.assertEqual(subject.periodic_scan_start_calls, 0)
 
 
 if __name__ == "__main__":

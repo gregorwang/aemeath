@@ -20,7 +20,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
         self.assertIsNotNone(config.screen_commentary)
         self.assertIsNotNone(config.idle_invasion)
         self.assertGreaterEqual(config.vision.target_fps, 1)
-        self.assertIn(config.llm.provider, {"none", "openai", "xai", "deepseek"})
+        self.assertIn(config.llm.provider, {"none", "openai", "xai", "deepseek", "kimi", "zhipu", "doubao"})
         self.assertIsInstance(config.wakeup.phrases, tuple)
         self.assertEqual(config.audio.tts_provider, "edge")
         self.assertIn(config.audio.asr_provider, {"openai_whisper", "google", "xai_realtime", "zhipu_asr"})
@@ -68,6 +68,8 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             config.idle_invasion.cell_padding = 12
             config.idle_invasion.participating_gifs = ("state1.gif", "state7.gif")
             config.idle_invasion.retreat_style = "ripple"
+            config.vision.periodic_scan_enabled = False
+            config.vision.periodic_scan_interval_minutes = 45
             self.assertTrue(manager.save(config))
 
             loaded = manager.load()
@@ -104,6 +106,8 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             self.assertEqual(loaded.idle_invasion.cell_padding, 12)
             self.assertEqual(loaded.idle_invasion.participating_gifs, ("state1.gif", "state7.gif"))
             self.assertEqual(loaded.idle_invasion.retreat_style, "ripple")
+            self.assertFalse(loaded.vision.periodic_scan_enabled)
+            self.assertEqual(loaded.vision.periodic_scan_interval_minutes, 45)
 
     def test_behavior_first_run_defaults_true_when_missing(self) -> None:
         from tempfile import TemporaryDirectory

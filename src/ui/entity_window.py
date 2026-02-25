@@ -116,6 +116,10 @@ class EntityWindow(QWidget):
     ROAM_INTERVAL_MS = (10_000, 20_000)
     PROBE_INTERVAL_MS = (14_000, 24_000)
     CLICK_RESTORE_MS = 3_000
+    GAZE_FOLLOW_MAX_X_RATIO = 0.22
+    GAZE_FOLLOW_MAX_Y_RATIO = 0.12
+    GAZE_FOLLOW_DEADZONE = 0.08
+    GAZE_FOLLOW_SMOOTHING = 0.28
 
     flee_completed = Signal()
     peek_completed = Signal()
@@ -963,6 +967,67 @@ class EntityWindow(QWidget):
         self._probe_state_name = None
         if self.isVisible():
             self.move(self._clamp_point_to_screen(self.pos(), visible_x_ratio=1.0, visible_y_ratio=1.0))
+
+    def apply_gaze_follow(
+        self,
+        face_x: float,
+        face_y: float = 0.0,
+        *,
+        face_detected: bool = True,
+        confidence: float = 1.0,
+    ) -> None:
+        if not self.isVisible():
+            return
+        if self._drag_active:
+            return
+        if self._anim_phase not in (self.ANIM_PHASE_PEEKING, self.ANIM_PHASE_ENGAGED):
+            return
+        if self._core_animation_running():
+            return
+        if self._is_animation_running(self._move_animation):
+            return
+        if self._is_animation_running(self._probe_sequence):
+            return
+        if self._last_positions is None:
+            self._rebuild_cached_positions()
+
+        base_x = self._last_positions.full if self._last_positions is not None else self.x()
+        base_y = self._last_y if self._last_y else self.y()
+        width = max(self.width(), 1)
+        height = max(self.height(), 1)
+        max_x_offset = max(24, int(width * self.GAZE_FOLLOW_MAX_X_RATIO))
+        max_y_offset = max(10, int(height * self.GAZE_FOLLOW_MAX_Y_RATIO))
+
+        clamped_x = max(-1.0, min(1.0, float(face_x)))
+        clamped_y = max(-1.0, min(1.0, float(face_y)))
+        if not face_detected:
+            clamped_x = 0.0
+            clamped_y = 0.0
+        if abs(clamped_x) < self.GAZE_FOLLOW_DEADZONE:
+            clamped_x = 0.0
+        if abs(clamped_y) < self.GAZE_FOLLOW_DEADZONE:
+            clamped_y = 0.0
+
+        target = self._clamp_point_to_screen(
+            QPoint(
+                int(round(base_x + clamped_x * max_x_offset)),
+                int(round(base_y + clamped_y * max_y_offset)),
+            ),
+            visible_x_ratio=1.0,
+            visible_y_ratio=1.0,
+        )
+        current = self.pos()
+        blend = self.GAZE_FOLLOW_SMOOTHING * max(0.2, min(1.0, float(confidence) or 1.0))
+        next_pos = self._clamp_point_to_screen(
+            QPoint(
+                int(round(current.x() + (target.x() - current.x()) * blend)),
+                int(round(current.y() + (target.y() - current.y()) * blend)),
+            ),
+            visible_x_ratio=1.0,
+            visible_y_ratio=1.0,
+        )
+        if next_pos != current:
+            self.move(next_pos)
 
     def _on_single_left_click(self) -> None:
         self._base_state_name = self.STATE_IDLE

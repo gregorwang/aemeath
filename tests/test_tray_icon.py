@@ -43,6 +43,7 @@ class SystemTrayManagerTest(unittest.TestCase):
         self._manager.invasion_debug_requested.connect(lambda: fired.append("invasion_debug"))
         self._manager.sad_comfort_debug_requested.connect(lambda: fired.append("sad_comfort_debug"))
         self._manager.no_face_debug_requested.connect(lambda: fired.append("no_face_debug"))
+        self._manager.camera_check_debug_requested.connect(lambda: fired.append("camera_check_debug"))
         self._manager.commentary_requested.connect(lambda: fired.append("commentary"))
         self._manager.guide_requested.connect(lambda: fired.append("guide"))
         self._manager.edit_scripts_requested.connect(lambda: fired.append("edit_scripts"))
@@ -60,6 +61,7 @@ class SystemTrayManagerTest(unittest.TestCase):
         actions_by_text["调试空闲入侵"].trigger()
         actions_by_text["调试悲伤安慰"].trigger()
         actions_by_text["调试无人脸提醒"].trigger()
+        actions_by_text["调试摄像头巡检"].trigger()
         actions_by_text["你在看什么？"].trigger()
         actions_by_text["使用指南"].trigger()
         actions_by_text["编辑台词"].trigger()
@@ -79,6 +81,7 @@ class SystemTrayManagerTest(unittest.TestCase):
                 "invasion_debug",
                 "sad_comfort_debug",
                 "no_face_debug",
+                "camera_check_debug",
                 "commentary",
                 "guide",
                 "edit_scripts",

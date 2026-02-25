@@ -80,6 +80,20 @@ class SettingsDialogConfigTest(unittest.TestCase):
 
         self.assertTrue(updated.behavior.resident_mode)
 
+    def test_to_config_updates_periodic_camera_scan(self) -> None:
+        config = AppConfig()
+        config.vision.camera_enabled = True
+        config.vision.periodic_scan_enabled = True
+        config.vision.periodic_scan_interval_minutes = 30
+        dialog = self._create_dialog(config)
+
+        dialog.periodic_scan_checkbox.setChecked(False)
+        dialog.periodic_scan_interval_spin.setValue(45)
+        updated = dialog.to_config()
+
+        self.assertFalse(updated.vision.periodic_scan_enabled)
+        self.assertEqual(updated.vision.periodic_scan_interval_minutes, 45)
+
 
 if __name__ == "__main__":
     unittest.main()

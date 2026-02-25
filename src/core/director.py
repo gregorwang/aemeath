@@ -121,6 +121,8 @@ class Director(QObject):
     USER_RETURN_LONG_TEXTS = ("你离开了好久！去做什么了？", "终于回来了！我都快睡着了。")
     PASSIVE_COMPANION_DURATION_MS = 30_000
     SCREEN_COMMENTARY_SUMMON_DELAY_MS = 800
+    PERIODIC_CAMERA_SCAN_DURATION_MS = 8_000
+    PERIODIC_CAMERA_MIN_FACE_RATIO = 0.25
     EXPRESSION_STATE_MAP = {
         "happy": "state6",
         "neutral": "state1",
@@ -203,6 +205,11 @@ class Director(QObject):
             getattr(getattr(app_config, "screen_commentary", None), "auto_enabled", False)
         )
         self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
+        self._periodic_scan_enabled = bool(getattr(getattr(app_config, "vision", None), "periodic_scan_enabled", True))
+        self._periodic_scan_interval_ms = self._resolve_periodic_scan_interval_ms(app_config)
+        self._periodic_scan_active = False
+        self._periodic_scan_started_camera = False
+        self._periodic_scan_samples: list[GazeData] = []
         self._screen_commentary_state_lock = threading.Lock()
         self._screen_commentary_active_count = 0
         self._screen_commentary_summon_pending = False
@@ -248,6 +255,12 @@ class Director(QObject):
         self._auto_screen_commentary_timer = QTimer(self)
         self._auto_screen_commentary_timer.setSingleShot(True)
         self._auto_screen_commentary_timer.timeout.connect(self._on_auto_screen_commentary_timeout)
+        self._periodic_scan_timer = QTimer(self)
+        self._periodic_scan_timer.setSingleShot(True)
+        self._periodic_scan_timer.timeout.connect(self._on_periodic_scan_timer_timeout)
+        self._periodic_scan_collect_timer = QTimer(self)
+        self._periodic_scan_collect_timer.setSingleShot(True)
+        self._periodic_scan_collect_timer.timeout.connect(self._finish_periodic_camera_scan)
         self._passive_presence_timer = QTimer(self)
         self._passive_presence_timer.setSingleShot(True)
         self._passive_presence_timer.timeout.connect(self._on_passive_presence_timeout)
@@ -289,6 +302,7 @@ class Director(QObject):
             self._state_machine.state_changed.connect(self._on_state_changed_for_particles)
 
         self._sync_auto_screen_commentary_timer()
+        self._sync_periodic_scan_timer()
 
     @property
     def current_state(self) -> EntityState:
@@ -313,14 +327,14 @@ class Director(QObject):
         idle_monitor.idle_time_updated.connect(self._on_idle_time_updated)
         self._arm_idle_threshold_with_jitter()
         idle_monitor.reset_to_standby()
-        self._sync_resident_visibility()
+        Director._sync_resident_visibility(self)
 
     @Slot()
     def on_user_idle(self) -> None:
         if self._voice_trajectory_playing:
             return
-        if self._is_resident_mode_enabled():
-            self._sync_resident_visibility()
+        if Director._is_resident_mode_enabled(self):
+            Director._sync_resident_visibility(self)
             return
         if self._state_machine.current_state != EntityState.HIDDEN:
             return
@@ -347,14 +361,14 @@ class Director(QObject):
 
     @Slot()
     def on_user_active(self) -> None:
-        if self._is_resident_mode_enabled():
+        if Director._is_resident_mode_enabled(self):
             self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
             self._passive_presence_active = False
             self._deep_sleep_active = False
             timer = getattr(self, "_passive_presence_timer", None)
             if timer is not None and timer.isActive():
                 timer.stop()
-            self._sync_resident_visibility()
+            Director._sync_resident_visibility(self)
             if self._idle_monitor is not None:
                 self._idle_monitor.reset_to_standby()
             return
@@ -411,6 +425,20 @@ class Director(QObject):
         QTimer.singleShot(0, self._trigger_no_face_test)
         return True
 
+    def trigger_periodic_camera_check_debug(self, *, source: str = "manual") -> bool:
+        source_name = (source or "manual").strip().lower() or "manual"
+        if self._voice_trajectory_playing:
+            self.LOGGER.info("[PeriodicCamera] Debug trigger skipped: voice trajectory active source=%s", source_name)
+            return False
+        if not self._camera_enabled or self._gaze_tracker is None:
+            self.LOGGER.info("[PeriodicCamera] Debug trigger skipped: camera disabled/unavailable source=%s", source_name)
+            return False
+        if self._periodic_scan_active:
+            self.LOGGER.info("[PeriodicCamera] Debug trigger skipped: scan already running source=%s", source_name)
+            return False
+        QTimer.singleShot(0, lambda s=source_name: self._start_periodic_camera_scan(source=s, debug_mode=True))
+        return True
+
     def request_screen_commentary(self, *, source: str = "manual") -> None:
         if self._screen_commentator is None:
             self.LOGGER.warning("[ScreenCommentary] Skipped: commentator unavailable")
@@ -447,7 +475,7 @@ class Director(QObject):
                 self._screen_commentary_summon_pending = True
             QTimer.singleShot(
                 Director.SCREEN_COMMENTARY_SUMMON_DELAY_MS,
-                lambda s=source_name: self._request_screen_commentary_after_summon(source_name=s),
+                lambda s=source_name: Director._request_screen_commentary_after_summon(self, source_name=s),
             )
             return
         self.LOGGER.info("[ScreenCommentary] Requested source=%s", source_name)
@@ -470,7 +498,7 @@ class Director(QObject):
     def _request_screen_commentary_after_summon(self, *, source_name: str) -> None:
         with self._screen_commentary_state_lock:
             self._screen_commentary_summon_pending = False
-        self.request_screen_commentary(source=source_name)
+        Director.request_screen_commentary(self, source=source_name)
 
     def _start_screen_commentary_worker(self, *, source_name: str) -> None:
         if self._screen_commentator is None:
@@ -580,6 +608,8 @@ class Director(QObject):
         self._preferred_position = (app_config.appearance.position or "auto").lower()
         self._auto_screen_commentary_enabled = bool(app_config.screen_commentary.auto_enabled)
         self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
+        self._periodic_scan_enabled = bool(getattr(app_config.vision, "periodic_scan_enabled", True))
+        self._periodic_scan_interval_ms = self._resolve_periodic_scan_interval_ms(app_config)
         self._eye_tracking_enabled = bool(app_config.vision.eye_tracking_enabled)
         self._camera_consent = bool(app_config.vision.camera_consent_granted)
         self._camera_enabled = bool(app_config.vision.camera_enabled) and self._camera_consent
@@ -614,12 +644,13 @@ class Director(QObject):
             self._on_audio_output_started()
         self._arm_idle_threshold_with_jitter()
         self._sync_auto_screen_commentary_timer()
+        self._sync_periodic_scan_timer()
 
         if self._idle_invasion_controller is not None:
             self._idle_invasion_controller.apply_config(app_config.idle_invasion)
             if hasattr(self._idle_invasion_controller, "set_dnd_enabled"):
                 self._idle_invasion_controller.set_dnd_enabled(self._dnd_mode)
-        self._sync_resident_visibility()
+        Director._sync_resident_visibility(self)
 
     @Slot(bool)
     def set_dnd_mode(self, enabled: bool) -> None:
@@ -632,7 +663,7 @@ class Director(QObject):
             self._idle_invasion_controller.set_dnd_enabled(self._dnd_mode)
         if (
             self._dnd_mode
-            and self._is_resident_mode_enabled()
+            and Director._is_resident_mode_enabled(self)
             and self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED)
         ):
             self._state_machine.transition_to(EntityState.HIDDEN)
@@ -640,7 +671,7 @@ class Director(QObject):
             self._idle_monitor.reset_to_standby()
             self._arm_idle_threshold_with_jitter()
         if not self._dnd_mode:
-            self._sync_resident_visibility()
+            Director._sync_resident_visibility(self)
 
     def is_dnd_mode(self) -> bool:
         return bool(self._dnd_mode)
@@ -663,8 +694,15 @@ class Director(QObject):
     def shutdown(self) -> None:
         self._stop_voice_scripted_entrance()
         self._stop_auto_dismiss_timer()
-        if self._auto_screen_commentary_timer.isActive():
-            self._auto_screen_commentary_timer.stop()
+        auto_commentary_timer = getattr(self, "_auto_screen_commentary_timer", None)
+        if auto_commentary_timer is not None and auto_commentary_timer.isActive():
+            auto_commentary_timer.stop()
+        periodic_scan_timer = getattr(self, "_periodic_scan_timer", None)
+        if periodic_scan_timer is not None and periodic_scan_timer.isActive():
+            periodic_scan_timer.stop()
+        periodic_collect_timer = getattr(self, "_periodic_scan_collect_timer", None)
+        if periodic_collect_timer is not None and periodic_collect_timer.isActive():
+            periodic_collect_timer.stop()
         if self._mood_decay_timer.isActive():
             self._mood_decay_timer.stop()
         if self._prolonged_idle_timer.isActive():
@@ -695,6 +733,11 @@ class Director(QObject):
         if self._idle_invasion_controller is not None:
             self._idle_invasion_controller.shutdown()
         self._set_entity_autonomous(False)
+        self._periodic_scan_active = False
+        self._periodic_scan_started_camera = False
+        periodic_samples = getattr(self, "_periodic_scan_samples", None)
+        if periodic_samples is not None:
+            periodic_samples.clear()
 
     def _enter_hidden(self) -> None:
         self._stop_auto_dismiss_timer()
@@ -762,7 +805,7 @@ class Director(QObject):
         if self._behavior_mode != BehaviorMode.SUMMONING:
             self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
         self._apply_behavior_mode_visual()
-        resident_active = self._is_resident_mode_enabled() and not self._dnd_mode
+        resident_active = Director._is_resident_mode_enabled(self) and not self._dnd_mode
         self._set_entity_autonomous(False if resident_active else not silent_presence_entry)
         if not silent_presence_entry and not resident_active:
             self._auto_dismiss_timer.start(self._auto_dismiss_ms)
@@ -791,31 +834,32 @@ class Director(QObject):
     def _on_idle_time_updated(self, idle_ms: int) -> None:
         self._latest_idle_time_ms = int(idle_ms)
         self._refresh_presence_state()
-        if self._is_resident_mode_enabled():
-            self._sync_resident_visibility()
+        if Director._is_resident_mode_enabled(self):
+            Director._sync_resident_visibility(self)
 
     @Slot(object)
     def _on_gaze_updated(self, gaze_data: object) -> None:
         if not isinstance(gaze_data, GazeData):
             return
         self._latest_gaze_data = gaze_data
+        Director._apply_window_gaze_follow(self, gaze_data)
+        sample_collector = getattr(self, "_collect_periodic_scan_sample", None)
+        if callable(sample_collector):
+            sample_collector(gaze_data)
         self._refresh_presence_state()
         self._maybe_trigger_no_face_test(gaze_data)
         self._track_expression_state(gaze_data)
         self._maybe_trigger_sad_comfort(gaze_data)
-        if not self._eye_tracking_enabled or self._ascii_renderer is None:
-            return
-        if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
-            return
-        if not self._current_ascii_template:
-            return
-        html_with_gaze = self._apply_current_gaze(self._current_ascii_template)
-        self._entity_window.set_ascii_content(html_with_gaze)
 
     @Slot(str)
     def _on_camera_error(self, message: str) -> None:
         self.LOGGER.warning("[Vision] %s", message)
         self._camera_enabled = False
+        if self._periodic_scan_collect_timer.isActive():
+            self._periodic_scan_collect_timer.stop()
+        self._periodic_scan_active = False
+        self._periodic_scan_started_camera = False
+        self._periodic_scan_samples.clear()
         self._reset_no_face_tracker()
         self._latest_gaze_data = GazeData(face_detected=False)
         self._latest_presence_state = PresenceState.UNKNOWN
@@ -825,6 +869,7 @@ class Director(QObject):
             self._passive_presence_timer.stop()
         self._stable_expression = "neutral"
         self._expression_votes = {"happy": 0, "neutral": 0, "angry": 0, "sad": 0}
+        self._sync_periodic_scan_timer()
 
     @Slot()
     def _on_audio_output_started(self) -> None:
@@ -875,8 +920,8 @@ class Director(QObject):
 
     @Slot()
     def _on_auto_dismiss_timeout(self) -> None:
-        if self._is_resident_mode_enabled():
-            self._sync_resident_visibility()
+        if Director._is_resident_mode_enabled(self):
+            Director._sync_resident_visibility(self)
             return
         if self._state_machine.current_state == EntityState.ENGAGED:
             self._mood_system.on_dismissed()
@@ -894,6 +939,11 @@ class Director(QObject):
             max(1, int(self._auto_screen_commentary_interval_ms / 60000)),
         )
         self.request_screen_commentary(source="timer")
+
+    @Slot()
+    def _on_periodic_scan_timer_timeout(self) -> None:
+        # Rearm after this cycle completes to avoid overlapping scans.
+        self._start_periodic_camera_scan(source="timer", debug_mode=False)
 
     @Slot()
     def _on_voice_trajectory_timeout(self) -> None:
@@ -932,6 +982,16 @@ class Director(QObject):
         minutes = max(1, min(1440, minutes))
         return minutes * 60 * 1000
 
+    @staticmethod
+    def _resolve_periodic_scan_interval_ms(app_config: AppConfig | None) -> int:
+        raw_minutes = getattr(getattr(app_config, "vision", None), "periodic_scan_interval_minutes", 30)
+        try:
+            minutes = int(raw_minutes)
+        except Exception:
+            minutes = 30
+        minutes = max(5, min(240, minutes))
+        return minutes * 60 * 1000
+
     def _sync_auto_screen_commentary_timer(self) -> None:
         if self._auto_screen_commentary_timer.isActive():
             self._auto_screen_commentary_timer.stop()
@@ -946,6 +1006,120 @@ class Director(QObject):
             "[ScreenCommentary] Auto timer armed: every %d min",
             max(1, int(self._auto_screen_commentary_interval_ms / 60000)),
         )
+
+    def _sync_periodic_scan_timer(self) -> None:
+        if self._periodic_scan_timer.isActive():
+            self._periodic_scan_timer.stop()
+        if not self._periodic_scan_enabled:
+            self.LOGGER.info("[PeriodicCamera] Timer disabled")
+            return
+        if not self._camera_enabled or self._gaze_tracker is None:
+            self.LOGGER.info("[PeriodicCamera] Timer unavailable: camera disabled/unavailable")
+            return
+        self._periodic_scan_timer.start(self._periodic_scan_interval_ms)
+        self.LOGGER.info(
+            "[PeriodicCamera] Timer armed: every %d min",
+            max(1, int(self._periodic_scan_interval_ms / 60000)),
+        )
+
+    def _start_periodic_camera_scan(self, *, source: str, debug_mode: bool) -> bool:
+        source_name = (source or "timer").strip().lower() or "timer"
+        if self._periodic_scan_active:
+            self.LOGGER.debug("[PeriodicCamera] Skip start: already active source=%s", source_name)
+            return False
+        if not self._periodic_scan_enabled and not debug_mode:
+            return False
+        if not self._camera_enabled or self._gaze_tracker is None:
+            self._sync_periodic_scan_timer()
+            return False
+        if self._dnd_mode and not debug_mode:
+            self.LOGGER.info("[PeriodicCamera] Skip by DND source=%s", source_name)
+            self._sync_periodic_scan_timer()
+            return False
+        if self._full_screen_pause and self._is_fullscreen_app_running() and not debug_mode:
+            self.LOGGER.info("[PeriodicCamera] Skip by fullscreen source=%s", source_name)
+            self._sync_periodic_scan_timer()
+            return False
+
+        self._periodic_scan_active = True
+        self._periodic_scan_samples.clear()
+        self._periodic_scan_started_camera = False
+        if not self._gaze_tracker.isRunning():
+            self._periodic_scan_started_camera = True
+            self._gaze_tracker.start_tracking()
+        self.LOGGER.info("[PeriodicCamera] Scan started source=%s", source_name)
+        self._periodic_scan_collect_timer.start(self.PERIODIC_CAMERA_SCAN_DURATION_MS)
+        return True
+
+    def _collect_periodic_scan_sample(self, gaze_data: GazeData) -> None:
+        if not self._periodic_scan_active:
+            return
+        self._periodic_scan_samples.append(gaze_data)
+        if len(self._periodic_scan_samples) > 300:
+            self._periodic_scan_samples = self._periodic_scan_samples[-300:]
+
+    @Slot()
+    def _finish_periodic_camera_scan(self) -> None:
+        if not self._periodic_scan_active:
+            self._sync_periodic_scan_timer()
+            return
+
+        samples = list(self._periodic_scan_samples)
+        self._periodic_scan_active = False
+        self._periodic_scan_samples.clear()
+        started_camera = self._periodic_scan_started_camera
+        self._periodic_scan_started_camera = False
+
+        if started_camera and self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
+            self._stop_camera_tracking()
+
+        if not samples:
+            self.LOGGER.info("[PeriodicCamera] Scan finished: no samples")
+            self._sync_periodic_scan_timer()
+            return
+
+        faces = [item for item in samples if bool(item.face_detected)]
+        face_ratio = float(len(faces)) / float(len(samples))
+        if not faces or face_ratio < self.PERIODIC_CAMERA_MIN_FACE_RATIO:
+            self.LOGGER.info("[PeriodicCamera] Scan result: absent face_ratio=%.2f", face_ratio)
+            self._apply_periodic_scan_visual(face_present=False, emotion_label="unknown")
+            self._sync_periodic_scan_timer()
+            return
+
+        emotion_votes: dict[str, float] = {}
+        for gaze in faces:
+            label = (gaze.emotion_label or "").strip().lower() or "neutral"
+            if label not in self.EXPRESSION_STATE_MAP:
+                label = "neutral"
+            emotion_votes[label] = emotion_votes.get(label, 0.0) + max(0.1, float(gaze.emotion_score))
+        dominant = max(emotion_votes.items(), key=lambda item: item[1])[0] if emotion_votes else "neutral"
+        self.LOGGER.info("[PeriodicCamera] Scan result: present face_ratio=%.2f emotion=%s", face_ratio, dominant)
+        self._apply_periodic_scan_visual(face_present=True, emotion_label=dominant)
+        self._sync_periodic_scan_timer()
+
+    def _apply_periodic_scan_visual(self, *, face_present: bool, emotion_label: str) -> None:
+        state = self._state_machine.current_state
+        if face_present and state == EntityState.HIDDEN:
+            self._suppress_engaged_script_once = True
+            self._suppress_camera_once = True
+            if not self.summon_now():
+                self._suppress_engaged_script_once = False
+                self._suppress_camera_once = False
+                return
+            state = self._state_machine.current_state
+
+        if state not in (EntityState.PEEKING, EntityState.ENGAGED):
+            return
+        if self._resolve_effective_behavior_mode() != BehaviorMode.IDLE:
+            return
+
+        if not face_present:
+            if not self._set_entity_state("sleep", as_base=False):
+                self._set_entity_state("state5", as_base=False)
+            return
+
+        target_state = self.EXPRESSION_STATE_MAP.get((emotion_label or "").strip().lower(), "state1")
+        self._set_entity_state(target_state, as_base=False)
 
     def _arm_idle_threshold_with_jitter(self) -> None:
         if self._idle_monitor is None:
@@ -980,8 +1154,8 @@ class Director(QObject):
                 return
             except Exception:
                 pass
-        self._current_ascii_template = self._resolve_ascii_content(script)
-        self._entity_window.set_ascii_content(self._apply_current_gaze(self._current_ascii_template))
+        # ASCII fallback is disabled in GIF-only runtime mode.
+        self._current_ascii_template = ""
 
     def _set_behavior_mode(self, mode: BehaviorMode, *, apply_visual: bool = True) -> None:
         changed = self._behavior_mode != mode
@@ -1042,6 +1216,29 @@ class Director(QObject):
         if self._ascii_renderer is None or not self._eye_tracking_enabled:
             return ascii_template
         return self._ascii_renderer.apply_eye_tracking(ascii_template, self._latest_gaze_data.face_x, eye_width=5)
+
+    def _apply_window_gaze_follow(self, gaze_data: GazeData) -> None:
+        if not bool(getattr(self, "_camera_enabled", False)):
+            return
+        if not bool(getattr(self, "_eye_tracking_enabled", False)):
+            return
+        state_machine = getattr(self, "_state_machine", None)
+        current_state = getattr(state_machine, "current_state", None)
+        if current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
+            return
+        entity_window = getattr(self, "_entity_window", None)
+        follow = getattr(entity_window, "apply_gaze_follow", None)
+        if not callable(follow):
+            return
+        try:
+            follow(
+                float(getattr(gaze_data, "face_x", 0.0)),
+                float(getattr(gaze_data, "face_y", 0.0)),
+                face_detected=bool(getattr(gaze_data, "face_detected", False)),
+                confidence=float(getattr(gaze_data, "confidence", 0.0)),
+            )
+        except Exception:
+            return
 
     def _refresh_presence_state(self) -> None:
         gaze_for_presence = self._latest_gaze_data if self._camera_enabled else None
@@ -1118,7 +1315,7 @@ class Director(QObject):
         if was_deep_sleep:
             if not self._set_entity_state("state2", as_base=False):
                 self._set_entity_state("state1", as_base=False)
-            resident_active = self._is_resident_mode_enabled() and not self._dnd_mode
+            resident_active = Director._is_resident_mode_enabled(self) and not self._dnd_mode
             self._set_entity_autonomous(not resident_active)
             if not resident_active:
                 self._auto_dismiss_timer.start(self._auto_dismiss_ms)
@@ -1127,9 +1324,9 @@ class Director(QObject):
     def _on_passive_presence_timeout(self) -> None:
         if not self._passive_presence_active:
             return
-        if self._is_resident_mode_enabled():
+        if Director._is_resident_mode_enabled(self):
             self._passive_presence_active = False
-            self._sync_resident_visibility()
+            Director._sync_resident_visibility(self)
             return
         self._passive_presence_active = False
         if self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED):
@@ -1139,7 +1336,7 @@ class Director(QObject):
         return bool(getattr(self, "_resident_mode", False))
 
     def _sync_resident_visibility(self) -> None:
-        if not self._is_resident_mode_enabled():
+        if not Director._is_resident_mode_enabled(self):
             return
         if self._dnd_mode:
             return

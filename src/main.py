@@ -39,7 +39,6 @@ try:
     from core.presence_detector import PresenceDetector
     from core.resource_scheduler import ResourceScheduler
     from core.voice_runtime import VoiceRuntimeController
-    from ui.ascii_renderer import AsciiRenderer
     from ui.entity_window import EntityWindow
     from ui.gif_particle import GifParticleManager
     from ui.settings_dialog import SettingsDialog
@@ -65,7 +64,6 @@ except ModuleNotFoundError:
     from .core.presence_detector import PresenceDetector
     from .core.resource_scheduler import ResourceScheduler
     from .core.voice_runtime import VoiceRuntimeController
-    from .ui.ascii_renderer import AsciiRenderer
     from .ui.entity_window import EntityWindow
     from .ui.gif_particle import GifParticleManager
     from .ui.settings_dialog import SettingsDialog
@@ -77,16 +75,27 @@ def _build_llm_provider(config) -> LLMProvider:
         return DummyProvider()
 
     provider = (config.llm.provider or "none").lower()
-    if provider in {"openai", "xai", "deepseek"}:
+    provider_defaults: dict[str, tuple[str, str]] = {
+        "openai": ("gpt-5-mini", "https://api.openai.com/v1"),
+        "xai": ("grok-4-latest", "https://api.x.ai"),
+        "deepseek": ("deepseek-chat", "https://api.deepseek.com/v1"),
+        "kimi": ("kimi-latest", "https://api.moonshot.cn/v1"),
+        "zhipu": ("glm-5", "https://open.bigmodel.cn/api/paas/v4"),
+        "doubao": ("doubao-seed-1-6-250615", "https://ark.cn-beijing.volces.com/api/v3"),
+    }
+    if provider in provider_defaults:
+        default_model, default_base_url = provider_defaults[provider]
         candidate = OpenAIProvider(
-            model=config.llm.model or "grok-4-latest",
+            model=(config.llm.model or "").strip() or default_model,
             api_key=(
                 config.llm.api_key
                 or os.environ.get("OPENAI_API_KEY", "")
                 or os.environ.get("POLOAI_API_KEY", "")
                 or os.environ.get("XAI_API_KEY", "")
             ),
-            base_url=config.llm.base_url,
+            base_url=(config.llm.base_url or "").strip() or default_base_url,
+            provider_name=provider,
+            enable_official_fallback=(provider == "openai"),
         )
         return candidate if candidate.is_available() else DummyProvider()
     return DummyProvider()
@@ -243,16 +252,11 @@ def main() -> int:
     package = loader.load_character(config.appearance.theme) or loader.load_character("default")
     character_dir = package.root_dir if package else characters_root / "default"
     character_voice = str(package.manifest.get("default_voice", config.audio.tts_voice)) if package else config.audio.tts_voice
-    character_width = int(package.manifest.get("ascii_width", config.appearance.ascii_width)) if package else config.appearance.ascii_width
     active_character_id = package.character_id if package else "default"
     audio_cache = get_cache_dir() / active_character_id
     audio_cache.mkdir(parents=True, exist_ok=True)
 
     asset_manager = AssetManager(character_dir=character_dir)
-    ascii_renderer = AsciiRenderer(
-        width=character_width,
-        font_size_px=config.appearance.font_size_px,
-    )
     entity_window = EntityWindow()
     def _resolve_state_asset_root(primary_dir):
         candidates = [
@@ -314,7 +318,6 @@ def main() -> int:
         entity_window=entity_window,
         audio_manager=audio_manager,
         asset_manager=asset_manager,
-        ascii_renderer=ascii_renderer,
         app_config=config,
         gaze_tracker=gaze_tracker,
         presence_detector=PresenceDetector(target_fps=config.vision.target_fps),
@@ -407,6 +410,20 @@ def main() -> int:
         else:
             logger.warning("[NoFaceTest] debug trigger skipped source=%s", source)
             _notify("无人脸提醒调试", "触发已跳过（可能在退场或轨迹召唤中）", timeout_ms=3200)
+
+    def _trigger_camera_check_debug(source: str) -> None:
+        try:
+            started = bool(director.trigger_periodic_camera_check_debug(source=source))
+        except Exception as exc:
+            logger.exception("[PeriodicCamera] debug trigger failed source=%s: %s", source, exc)
+            _notify("摄像头巡检调试失败", f"{exc}", timeout_ms=4200)
+            return
+        if started:
+            logger.info("[PeriodicCamera] debug trigger success source=%s", source)
+            _notify("摄像头巡检调试", "已开始执行摄像头巡检。", timeout_ms=2200)
+        else:
+            logger.warning("[PeriodicCamera] debug trigger skipped source=%s", source)
+            _notify("摄像头巡检调试", "触发已跳过（请检查摄像头开关、授权或当前状态）。", timeout_ms=3200)
 
     def _execute_voice_command(text: str, *, source: str) -> bool:
         cleaned = (text or "").strip()
@@ -604,6 +621,7 @@ def main() -> int:
         tray_manager.invasion_debug_requested.connect(lambda: _trigger_idle_invasion_debug("tray"))
         tray_manager.sad_comfort_debug_requested.connect(lambda: _trigger_sad_comfort_debug("tray"))
         tray_manager.no_face_debug_requested.connect(lambda: _trigger_no_face_debug("tray"))
+        tray_manager.camera_check_debug_requested.connect(lambda: _trigger_camera_check_debug("tray"))
         tray_manager.commentary_requested.connect(lambda: director.request_screen_commentary(source="tray"))
         tray_manager.guide_requested.connect(lambda: _open_quick_start_guide(source="tray"))
         tray_manager.edit_scripts_requested.connect(lambda: _edit_scripts_file("tray"))
@@ -626,13 +644,8 @@ def main() -> int:
                 return
 
             local_asset_mgr = AssetManager(pkg.root_dir)
-            local_renderer = AsciiRenderer(
-                width=int(pkg.manifest.get("ascii_width", config.appearance.ascii_width)),
-                font_size_px=config.appearance.font_size_px,
-            )
             director.switch_character(
                 asset_manager=local_asset_mgr,
-                ascii_renderer=local_renderer,
                 voice=str(pkg.manifest.get("default_voice", character_voice)),
             )
             asset_manager = local_asset_mgr
@@ -653,6 +666,7 @@ def main() -> int:
         invasion_debug_action = menu.addAction("调试空闲入侵")
         sad_comfort_debug_action = menu.addAction("调试悲伤安慰")
         no_face_debug_action = menu.addAction("调试无人脸提醒")
+        periodic_camera_debug_action = menu.addAction("调试摄像头巡检")
         commentary_action = menu.addAction("你在看什么？")
         guide_action = menu.addAction("使用指南")
         edit_scripts_action = menu.addAction("编辑台词")
@@ -678,6 +692,8 @@ def main() -> int:
             _trigger_sad_comfort_debug("context_menu")
         elif chosen == no_face_debug_action:
             _trigger_no_face_debug("context_menu")
+        elif chosen == periodic_camera_debug_action:
+            _trigger_camera_check_debug("context_menu")
         elif chosen == commentary_action:
             director.request_screen_commentary(source="context_menu")
         elif chosen == guide_action:

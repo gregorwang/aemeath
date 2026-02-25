@@ -56,16 +56,16 @@ class DirectorVisualsTest(unittest.TestCase):
         self.assertEqual(subject.resolve_ascii_calls, 0)
         self.assertEqual(subject._current_ascii_template, "")
 
-    def test_state_switch_does_not_skip_ascii_render(self) -> None:
+    def test_state_switch_without_sprite_uses_gif_only_fallback(self) -> None:
         subject = _DirectorVisualSubject()
         script = Script(id="ascii", text="fallback", sprite_path=None)
 
         Director._set_visual_from_script(subject, script)
 
         self.assertEqual(subject.state_calls, [("state1", True)])
-        self.assertEqual(subject.resolve_ascii_calls, 1)
-        self.assertEqual(subject._entity_window.ascii_calls, ["ASCII:fallback"])
-        self.assertEqual(subject._current_ascii_template, "ASCII:fallback")
+        self.assertEqual(subject.resolve_ascii_calls, 0)
+        self.assertEqual(subject._entity_window.ascii_calls, [])
+        self.assertEqual(subject._current_ascii_template, "")
 
 
 if __name__ == "__main__":

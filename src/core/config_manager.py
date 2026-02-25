@@ -58,6 +58,8 @@ class VisionConfig:
     camera_index: int = 0
     target_fps: int = 15
     eye_tracking_enabled: bool = True
+    periodic_scan_enabled: bool = True
+    periodic_scan_interval_minutes: int = 30
 
 
 @dataclass(slots=True)
@@ -69,7 +71,7 @@ class WakeupConfig:
 
 @dataclass(slots=True)
 class LLMConfig:
-    provider: str = "xai"  # none / openai / xai / deepseek
+    provider: str = "xai"  # none / openai / xai / deepseek / kimi / zhipu / doubao
     model: str = "grok-4-latest"
     api_key: str = ""
     base_url: str = "https://api.x.ai"
@@ -278,6 +280,8 @@ class ConfigManager:
                 "camera_index": int(config.vision.camera_index),
                 "target_fps": int(config.vision.target_fps),
                 "eye_tracking_enabled": bool(config.vision.eye_tracking_enabled),
+                "periodic_scan_enabled": bool(config.vision.periodic_scan_enabled),
+                "periodic_scan_interval_minutes": int(config.vision.periodic_scan_interval_minutes),
             },
             "wakeup": {
                 "enabled": bool(config.wakeup.enabled),
@@ -424,6 +428,8 @@ class ConfigManager:
             camera_index=max(0, int(payload.get("camera_index", 0))),
             target_fps=max(1, min(30, int(payload.get("target_fps", 15)))),
             eye_tracking_enabled=bool(payload.get("eye_tracking_enabled", True)),
+            periodic_scan_enabled=bool(payload.get("periodic_scan_enabled", True)),
+            periodic_scan_interval_minutes=max(5, min(240, int(payload.get("periodic_scan_interval_minutes", 30)))),
         )
 
     @staticmethod
@@ -449,13 +455,25 @@ class ConfigManager:
         if not isinstance(payload, dict):
             return LLMConfig()
         provider = str(payload.get("provider", "xai")).lower()
-        if provider not in {"none", "openai", "xai", "deepseek"}:
+        provider_defaults: dict[str, tuple[str, str]] = {
+            "none": ("grok-4-latest", "https://api.x.ai"),
+            "openai": ("gpt-5-mini", "https://api.openai.com/v1"),
+            "xai": ("grok-4-latest", "https://api.x.ai"),
+            "deepseek": ("deepseek-chat", "https://api.deepseek.com/v1"),
+            "kimi": ("kimi-latest", "https://api.moonshot.cn/v1"),
+            "zhipu": ("glm-5", "https://open.bigmodel.cn/api/paas/v4"),
+            "doubao": ("doubao-seed-1-6-250615", "https://ark.cn-beijing.volces.com/api/v3"),
+        }
+        if provider not in provider_defaults:
             provider = "xai"
+        default_model, default_base_url = provider_defaults[provider]
+        model = str(payload.get("model", default_model)).strip() or default_model
+        base_url = str(payload.get("base_url", default_base_url)).strip() or default_base_url
         return LLMConfig(
             provider=provider,
-            model=str(payload.get("model", "grok-4-latest")),
+            model=model,
             api_key=str(payload.get("api_key", "")),
-            base_url=str(payload.get("base_url", "https://api.x.ai")),
+            base_url=base_url,
         )
 
     @staticmethod

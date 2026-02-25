@@ -60,6 +60,10 @@ class LLMProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provider._base_url, "https://poloai.top/v1")
         provider2 = OpenAIProvider(api_key="k", base_url="https://api.x.ai/v1/responses")
         self.assertEqual(provider2._base_url, "https://api.x.ai/v1")
+        provider3 = OpenAIProvider(api_key="k", base_url="https://open.bigmodel.cn/api/paas/v4")
+        self.assertEqual(provider3._base_url, "https://open.bigmodel.cn/api/paas/v4")
+        provider4 = OpenAIProvider(api_key="k", base_url="https://ark.cn-beijing.volces.com/api/v3")
+        self.assertEqual(provider4._base_url, "https://ark.cn-beijing.volces.com/api/v3")
 
     def test_openai_extracts_stream_delta_text(self) -> None:
         payload = {

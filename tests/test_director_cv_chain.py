@@ -71,6 +71,29 @@ class _GazeUpdateSubject:
         self.sad_comfort_calls += 1
 
 
+class _GazeFollowWindowStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple[float, float, bool, float]] = []
+
+    def apply_gaze_follow(
+        self,
+        face_x: float,
+        face_y: float,
+        *,
+        face_detected: bool,
+        confidence: float,
+    ) -> None:
+        self.calls.append((float(face_x), float(face_y), bool(face_detected), float(confidence)))
+
+
+class _GazeFollowSubject(_GazeUpdateSubject):
+    def __init__(self) -> None:
+        super().__init__()
+        self._camera_enabled = True
+        self._eye_tracking_enabled = True
+        self._entity_window = _GazeFollowWindowStub()
+
+
 class _PresenceFlowSubject:
     def __init__(self, *, camera_enabled: bool, result: PresenceState) -> None:
         self._camera_enabled = bool(camera_enabled)
@@ -151,6 +174,19 @@ class DirectorCvChainTest(unittest.TestCase):
         self.assertEqual(subject.no_face_calls, 1)
         self.assertEqual(subject.expression_calls, 1)
         self.assertEqual(subject.sad_comfort_calls, 1)
+
+    def test_gaze_update_applies_window_follow_when_enabled(self) -> None:
+        subject = _GazeFollowSubject()
+        gaze_data = GazeData(face_detected=True, face_x=0.4, face_y=-0.2, confidence=0.8)
+
+        Director._on_gaze_updated(subject, gaze_data)
+
+        self.assertEqual(len(subject._entity_window.calls), 1)
+        follow_call = subject._entity_window.calls[0]
+        self.assertAlmostEqual(follow_call[0], 0.4)
+        self.assertAlmostEqual(follow_call[1], -0.2)
+        self.assertTrue(follow_call[2])
+        self.assertAlmostEqual(follow_call[3], 0.8)
 
     def test_refresh_presence_fuses_idle_and_gaze(self) -> None:
         subject = _PresenceFlowSubject(camera_enabled=True, result=PresenceState.PRESENT_PASSIVE)

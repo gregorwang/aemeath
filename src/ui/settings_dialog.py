@@ -35,6 +35,16 @@ except ModuleNotFoundError:
 class SettingsDialog(QDialog):
     """Runtime settings editor."""
     MODEL_PRESETS = [
+        "kimi-latest",
+        "kimi-thinking-preview",
+        "kimi-k2-0711-preview",
+        "glm-5",
+        "glm-4.5",
+        "glm-4.5-air",
+        "glm-4.5-flash",
+        "doubao-seed-1-6-250615",
+        "doubao-seed-1-6-thinking-250715",
+        "ep-xxxxxxxxxxxxxxxxx",
         "grok-4-latest",
         "grok-4",
         "grok-4-fast-reasoning",
@@ -49,10 +59,34 @@ class SettingsDialog(QDialog):
         "gpt-4.1",
         "gpt-4o",
     ]
+    MODEL_PRESETS_BY_PROVIDER = {
+        "openai": ["gpt-5-mini", "gpt-5", "gpt-4.1", "gpt-4o"],
+        "xai": ["grok-4-latest", "grok-4", "grok-3-mini-fast", "grok-code-fast-1"],
+        "deepseek": ["deepseek-chat"],
+        "kimi": ["kimi-latest", "kimi-thinking-preview", "kimi-k2-0711-preview"],
+        "zhipu": ["glm-5", "glm-4.5", "glm-4.5-air", "glm-4.5-flash"],
+        "doubao": [
+            "doubao-seed-1-6-250615",
+            "doubao-seed-1-6-thinking-250715",
+            "ep-xxxxxxxxxxxxxxxxx",
+        ],
+    }
+    PROVIDER_DEFAULTS = {
+        "none": ("", ""),
+        "openai": ("https://api.openai.com/v1", "gpt-5-mini"),
+        "xai": ("https://api.x.ai", "grok-4-latest"),
+        "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat"),
+        "kimi": ("https://api.moonshot.cn/v1", "kimi-latest"),
+        "zhipu": ("https://open.bigmodel.cn/api/paas/v4", "glm-5"),
+        "doubao": ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-250615"),
+    }
     ENDPOINT_PRESETS = {
         "OpenAI 官方": ("openai", "https://api.openai.com/v1", "gpt-5-mini"),
         "xAI 官方(推荐看图)": ("xai", "https://api.x.ai", "grok-4-latest"),
         "DeepSeek 官方(当前文本为主)": ("deepseek", "https://api.deepseek.com/v1", "deepseek-chat"),
+        "Kimi 官方": ("kimi", "https://api.moonshot.cn/v1", "kimi-latest"),
+        "智谱官方": ("zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-5"),
+        "豆包方舟": ("doubao", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-250615"),
     }
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None):
@@ -172,7 +206,8 @@ class SettingsDialog(QDialog):
         ai_tab = QWidget(self)
         ai_form = QFormLayout(ai_tab)
         self.provider_combo = QComboBox(self)
-        self.provider_combo.addItems(["none", "openai", "xai", "deepseek"])
+        self.provider_combo.addItems(["none", "openai", "xai", "deepseek", "kimi", "zhipu", "doubao"])
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
         self.endpoint_preset_combo = QComboBox(self)
         self.endpoint_preset_combo.addItems(["自定义(不改)", *self.ENDPOINT_PRESETS.keys()])
         self.endpoint_preset_combo.currentTextChanged.connect(self._on_endpoint_preset_changed)
@@ -235,12 +270,18 @@ class SettingsDialog(QDialog):
         vision_form = QFormLayout(vision_box)
         self.camera_enabled_checkbox = QCheckBox("启用摄像头", self)
         self.eye_tracking_checkbox = QCheckBox("启用视线跟踪", self)
+        self.periodic_scan_checkbox = QCheckBox("启用周期性摄像头巡检", self)
+        self.periodic_scan_interval_spin = QSpinBox(self)
+        self.periodic_scan_interval_spin.setRange(5, 240)
+        self.periodic_scan_interval_spin.setSuffix(" 分钟")
         self.camera_index_spin = QSpinBox(self)
         self.camera_index_spin.setRange(0, 8)
         self.target_fps_spin = QSpinBox(self)
         self.target_fps_spin.setRange(1, 30)
         vision_form.addRow("", self.camera_enabled_checkbox)
         vision_form.addRow("", self.eye_tracking_checkbox)
+        vision_form.addRow("", self.periodic_scan_checkbox)
+        vision_form.addRow("巡检间隔", self.periodic_scan_interval_spin)
         vision_form.addRow("摄像头设备编号(0=默认)", self.camera_index_spin)
         vision_form.addRow("视觉采样帧率(FPS)", self.target_fps_spin)
 
@@ -327,6 +368,12 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
         )
+        ok_button = button_box.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_button is not None:
+            ok_button.setText("保存并应用")
+        cancel_button = button_box.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_button is not None:
+            cancel_button.setText("取消")
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         return button_box
@@ -363,10 +410,16 @@ class SettingsDialog(QDialog):
             "- none: 不调用远程模型\n"
             "- openai: OpenAI 官方接口\n"
             "- xai: xAI 官方接口，视觉场景常用\n"
-            "- deepseek: DeepSeek 官方接口，文本场景常用"
+            "- deepseek: DeepSeek 官方接口，文本场景常用\n"
+            "- kimi: Moonshot Kimi 官方接口\n"
+            "- zhipu: 智谱 GLM 官方接口\n"
+            "- doubao: 火山方舟（豆包）官方接口"
         )
         self.endpoint_preset_combo.setToolTip("快速填充 provider/base_url/model 组合；“自定义(不改)”不覆盖现有输入。")
-        self.model_combo.setToolTip("模型 ID。可从预设中选，也可手动输入服务端支持的模型名。")
+        self.model_combo.setToolTip(
+            "模型 ID。可从预设中选，也可手动输入服务端支持的模型名。"
+            "豆包方舟常见做法是填写推理接入点 ID（ep-...）。"
+        )
         self.base_url_edit.setToolTip("LLM API 根地址，仅接受 http/https。格式错误会显示红框。")
         self.api_key_edit.setToolTip("LLM API 密钥，不保存到日志。留空将导致远程调用失败。")
         self.screen_streaming_checkbox.setToolTip("屏幕解读时分段输出，响应更快。")
@@ -377,6 +430,8 @@ class SettingsDialog(QDialog):
         self.screen_auto_interval_spin.setToolTip("自动屏幕解读触发间隔（分钟）。")
         self.test_api_button.setToolTip("基于当前 provider/base_url/api_key 发起一次轻量连通性测试。")
         self.camera_enabled_checkbox.setToolTip("开启后允许程序按需访问摄像头。")
+        self.periodic_scan_checkbox.setToolTip("每隔固定时间短暂启动摄像头，判断是否在屏幕前并输出状态动作。")
+        self.periodic_scan_interval_spin.setToolTip("周期性摄像头巡检间隔（分钟）。")
         self.camera_index_spin.setToolTip("默认填 0（系统默认摄像头），有多个摄像头时可试 1、2。")
         self.target_fps_spin.setToolTip("每秒处理帧数。越高越流畅，但占用更高。")
         self.mic_enabled_checkbox.setToolTip("语音输入总开关；关闭后将禁用 ASR 相关配置。")
@@ -406,6 +461,7 @@ class SettingsDialog(QDialog):
         """Wire control dependencies and apply initial enabled states."""
         self.offline_mode_checkbox.toggled.connect(self._apply_control_dependencies)
         self.camera_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
+        self.periodic_scan_checkbox.toggled.connect(self._apply_control_dependencies)
         self.wakeup_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
         self.mic_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
         self.invasion_enabled_checkbox.toggled.connect(self._apply_control_dependencies)
@@ -420,6 +476,8 @@ class SettingsDialog(QDialog):
             self._on_screen_auto_toggled(self.screen_auto_commentary_checkbox.isChecked())
 
         camera_enabled = self.camera_enabled_checkbox.isChecked()
+        self.periodic_scan_checkbox.setEnabled(camera_enabled)
+        self.periodic_scan_interval_spin.setEnabled(camera_enabled and self.periodic_scan_checkbox.isChecked())
         self.camera_index_spin.setEnabled(camera_enabled)
         self.target_fps_spin.setEnabled(camera_enabled)
 
@@ -447,11 +505,13 @@ class SettingsDialog(QDialog):
     @staticmethod
     def _normalize_base_url_for_probe(base_url: str) -> str:
         """
-        Normalize base URL to OpenAI-compatible /v1 root before probing /models.
+        Normalize base URL before probing /models.
         Accepts inputs such as:
         - https://api.x.ai
         - https://api.x.ai/v1
         - https://api.x.ai/v1/chat/completions
+        - https://open.bigmodel.cn/api/paas/v4/chat/completions
+        - https://ark.cn-beijing.volces.com/api/v3/responses
         """
         raw = (base_url or "").strip().rstrip("/")
         if not raw:
@@ -465,14 +525,8 @@ class SettingsDialog(QDialog):
             if path.endswith(suffix):
                 path = path[: -len(suffix)]
                 break
-        if "/v1/" in path:
-            path = path.split("/v1/", maxsplit=1)[0] + "/v1"
-        elif path.endswith("/v1"):
-            pass
-        elif not path:
+        if not path:
             path = "/v1"
-        else:
-            path = f"{path}/v1"
         return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
     def _test_api_connection(self) -> None:
@@ -563,7 +617,8 @@ class SettingsDialog(QDialog):
         self.invasion_gifs_edit.setText(", ".join(config.idle_invasion.participating_gifs))
 
         self._set_combo_text(self.provider_combo, config.llm.provider, "xai")
-        self._set_combo_text(self.model_combo, config.llm.model, "grok-4-latest")
+        self._on_provider_changed(self.provider_combo.currentText())
+        self._set_combo_text(self.model_combo, config.llm.model, self._default_model_for_provider(self.provider_combo.currentText()))
         self.endpoint_preset_combo.setCurrentIndex(0)
         self.base_url_edit.setText(config.llm.base_url)
         self.api_key_edit.setText(config.llm.api_key)
@@ -577,6 +632,8 @@ class SettingsDialog(QDialog):
 
         self.camera_enabled_checkbox.setChecked(bool(config.vision.camera_enabled))
         self.eye_tracking_checkbox.setChecked(bool(config.vision.eye_tracking_enabled))
+        self.periodic_scan_checkbox.setChecked(bool(config.vision.periodic_scan_enabled))
+        self.periodic_scan_interval_spin.setValue(max(5, min(240, int(config.vision.periodic_scan_interval_minutes))))
         self.camera_index_spin.setValue(max(0, int(config.vision.camera_index)))
         self.target_fps_spin.setValue(max(1, min(30, int(config.vision.target_fps))))
 
@@ -620,14 +677,24 @@ class SettingsDialog(QDialog):
         llm = replace(
             self._source.llm,
             provider=self.provider_combo.currentText().strip().lower() or "none",
-            model=self.model_combo.currentText().strip() or self._source.llm.model,
-            base_url=self.base_url_edit.text().strip() or self._source.llm.base_url,
+            model=(
+                self.model_combo.currentText().strip()
+                or self._source.llm.model
+                or self._default_model_for_provider(self.provider_combo.currentText())
+            ),
+            base_url=(
+                self.base_url_edit.text().strip()
+                or self._source.llm.base_url
+                or self._default_base_url_for_provider(self.provider_combo.currentText())
+            ),
             api_key=self.api_key_edit.text().strip(),
         )
         vision = replace(
             self._source.vision,
             camera_enabled=self.camera_enabled_checkbox.isChecked(),
             eye_tracking_enabled=self.eye_tracking_checkbox.isChecked(),
+            periodic_scan_enabled=self.periodic_scan_checkbox.isChecked(),
+            periodic_scan_interval_minutes=int(self.periodic_scan_interval_spin.value()),
             camera_index=int(self.camera_index_spin.value()),
             target_fps=int(self.target_fps_spin.value()),
         )
@@ -722,6 +789,61 @@ class SettingsDialog(QDialog):
                 combo.setCurrentIndex(idx)
                 return
         combo.setCurrentIndex(0)
+
+    def _default_base_url_for_provider(self, provider: str) -> str:
+        normalized = (provider or "").strip().lower()
+        return str(self.PROVIDER_DEFAULTS.get(normalized, ("", ""))[0])
+
+    def _default_model_for_provider(self, provider: str) -> str:
+        normalized = (provider or "").strip().lower()
+        return str(self.PROVIDER_DEFAULTS.get(normalized, ("", ""))[1])
+
+    def _model_presets_for_provider(self, provider: str) -> list[str]:
+        normalized = (provider or "").strip().lower()
+        presets = self.MODEL_PRESETS_BY_PROVIDER.get(normalized)
+        return list(presets) if presets else list(self.MODEL_PRESETS)
+
+    def _on_provider_changed(self, provider: str) -> None:
+        normalized = (provider or "").strip().lower()
+        current_model = self.model_combo.currentText().strip()
+        model_presets = self._model_presets_for_provider(normalized)
+        preferred_default = self._default_model_for_provider(normalized) or (model_presets[0] if model_presets else "")
+
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        if model_presets:
+            self.model_combo.addItems(model_presets)
+        self.model_combo.blockSignals(False)
+        self._set_combo_text(
+            self.model_combo,
+            current_model or preferred_default,
+            preferred_default,
+        )
+        model_edit = self.model_combo.lineEdit()
+        if model_edit is not None:
+            if normalized == "doubao":
+                model_edit.setPlaceholderText("例如 doubao-seed-1-6-250615 或 ep-xxxxxxxxxxxxxxxxx")
+            elif normalized == "kimi":
+                model_edit.setPlaceholderText("例如 kimi-latest")
+            elif normalized == "zhipu":
+                model_edit.setPlaceholderText("例如 glm-5")
+            else:
+                model_edit.setPlaceholderText("")
+
+        if normalized == "openai":
+            self.base_url_edit.setPlaceholderText("例如 https://api.openai.com/v1")
+        elif normalized == "xai":
+            self.base_url_edit.setPlaceholderText("例如 https://api.x.ai")
+        elif normalized == "deepseek":
+            self.base_url_edit.setPlaceholderText("例如 https://api.deepseek.com/v1")
+        elif normalized == "kimi":
+            self.base_url_edit.setPlaceholderText("例如 https://api.moonshot.cn/v1")
+        elif normalized == "zhipu":
+            self.base_url_edit.setPlaceholderText("例如 https://open.bigmodel.cn/api/paas/v4")
+        elif normalized == "doubao":
+            self.base_url_edit.setPlaceholderText("例如 https://ark.cn-beijing.volces.com/api/v3")
+        else:
+            self.base_url_edit.setPlaceholderText("例如 https://api.openai.com/v1")
 
     def _on_endpoint_preset_changed(self, label: str) -> None:
         preset = self.ENDPOINT_PRESETS.get((label or "").strip())
