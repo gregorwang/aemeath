@@ -20,6 +20,7 @@ from PySide6.QtGui import QGuiApplication
 from .asset_manager import AssetManager, Script
 from .audio_manager import AudioManager, AudioPriority
 from .audio_output_monitor import AudioOutputMonitor
+from .character_states import CHARACTER_STATES, build_expression_state_map
 from .entropy_engine import EntropyEngine
 from .gif_state_mapper import GifStateMapper
 from .idle_monitor import IdleMonitor
@@ -123,12 +124,7 @@ class Director(QObject):
     SCREEN_COMMENTARY_SUMMON_DELAY_MS = 800
     PERIODIC_CAMERA_SCAN_DURATION_MS = 8_000
     PERIODIC_CAMERA_MIN_FACE_RATIO = 0.25
-    EXPRESSION_STATE_MAP = {
-        "happy": "state6",
-        "neutral": "state1",
-        "angry": "state4",
-        "sad": "state5",
-    }
+    EXPRESSION_STATE_MAP = build_expression_state_map()
     EXPRESSION_MOOD_DELTA = {
         "happy": 0.05,
         "neutral": 0.0,
@@ -170,6 +166,9 @@ class Director(QObject):
         self._full_screen_pause = bool(app_config.behavior.full_screen_pause) if app_config else True
         self._audio_output_reactive = bool(app_config.behavior.audio_output_reactive) if app_config else True
         self._resident_mode = bool(getattr(getattr(app_config, "behavior", None), "resident_mode", False)) if app_config else False
+        self._scripted_entrance_enabled = bool(
+            getattr(getattr(app_config, "behavior", None), "scripted_entrance_enabled", False)
+        ) if app_config else False
         self._preferred_position = (app_config.appearance.position if app_config else "right").lower()
         self._dnd_mode = False
 
@@ -439,6 +438,20 @@ class Director(QObject):
         QTimer.singleShot(0, lambda s=source_name: self._start_periodic_camera_scan(source=s, debug_mode=True))
         return True
 
+    def trigger_trajectory_entrance_debug(self, *, source: str = "manual") -> bool:
+        source_name = (source or "manual").strip().lower() or "manual"
+        if self._voice_trajectory_playing:
+            self.LOGGER.info("[TrajectoryEntrance] Debug trigger skipped: already playing source=%s", source_name)
+            return False
+        if self._state_machine.current_state == EntityState.FLEEING:
+            self.LOGGER.info("[TrajectoryEntrance] Debug trigger skipped: state=fleeing source=%s", source_name)
+            return False
+        try:
+            return bool(self._try_start_voice_scripted_entrance())
+        except ScriptedEntranceError as exc:
+            self.LOGGER.warning("[TrajectoryEntrance] Debug trigger failed source=%s: %s", source_name, exc)
+            return False
+
     def request_screen_commentary(self, *, source: str = "manual") -> None:
         if self._screen_commentator is None:
             self.LOGGER.warning("[ScreenCommentary] Skipped: commentator unavailable")
@@ -558,6 +571,14 @@ class Director(QObject):
             return False
         if state == EntityState.HIDDEN:
             self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
+            if bool(getattr(self, "_scripted_entrance_enabled", False)):
+                try:
+                    if self._try_start_voice_scripted_entrance():
+                        return True
+                except ScriptedEntranceError:
+                    logger = getattr(self, "LOGGER", None)
+                    if logger is not None:
+                        logger.info("[Summon] 剧本式登场不可用，使用普通登场。")
             return self._state_machine.transition_to(EntityState.ENGAGED)
         if state == EntityState.PEEKING:
             return self._state_machine.transition_to(EntityState.ENGAGED)
@@ -605,6 +626,7 @@ class Director(QObject):
         self._full_screen_pause = bool(app_config.behavior.full_screen_pause)
         self._audio_output_reactive = bool(app_config.behavior.audio_output_reactive)
         self._resident_mode = bool(getattr(app_config.behavior, "resident_mode", False))
+        self._scripted_entrance_enabled = bool(getattr(app_config.behavior, "scripted_entrance_enabled", False))
         self._preferred_position = (app_config.appearance.position or "auto").lower()
         self._auto_screen_commentary_enabled = bool(app_config.screen_commentary.auto_enabled)
         self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
@@ -1831,12 +1853,9 @@ class Director(QObject):
     def _build_voice_trajectory_gif_map(self) -> dict[int, str]:
         characters_root = self._base_dir / "characters"
         mapping: dict[int, str] = {}
-        for idx in range(1, 8):
-            path = characters_root / f"state{idx}.gif"
+        for state_id, info in CHARACTER_STATES.items():
+            path = characters_root / info.gif_filename
             if path.exists():
-                mapping[idx] = str(path)
-        state8 = characters_root / "aemeath.gif"
-        if state8.exists():
-            mapping[8] = str(state8)
+                mapping[state_id] = str(path)
         return mapping
 

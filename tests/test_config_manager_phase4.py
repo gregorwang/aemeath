@@ -27,6 +27,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
         self.assertIn(config.audio.voice_input_mode, {"continuous", "push_to_talk"})
         self.assertIsInstance(config.behavior.first_run, bool)
         self.assertIsInstance(config.behavior.resident_mode, bool)
+        self.assertIsInstance(config.behavior.scripted_entrance_enabled, bool)
 
     def test_save_and_reload_new_fields(self) -> None:
         from tempfile import TemporaryDirectory
@@ -40,6 +41,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             config.behavior.audio_output_reactive = False
             config.behavior.first_run = False
             config.behavior.resident_mode = True
+            config.behavior.scripted_entrance_enabled = True
             config.wakeup.enabled = True
             config.wakeup.phrases = ("小爱同学请你出来",)
             config.llm.provider = "xai"
@@ -78,6 +80,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             self.assertFalse(loaded.behavior.audio_output_reactive)
             self.assertFalse(loaded.behavior.first_run)
             self.assertTrue(loaded.behavior.resident_mode)
+            self.assertTrue(loaded.behavior.scripted_entrance_enabled)
             self.assertTrue(loaded.wakeup.enabled)
             self.assertEqual(loaded.wakeup.phrases, ("小爱同学请你出来",))
             self.assertEqual(loaded.llm.provider, "xai")
@@ -129,6 +132,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             self.assertTrue(loaded.behavior.debug_mode)
             self.assertTrue(loaded.behavior.first_run)
             self.assertFalse(loaded.behavior.resident_mode)
+            self.assertFalse(loaded.behavior.scripted_entrance_enabled)
 
     def test_idle_invasion_retreat_style_fallback(self) -> None:
         from tempfile import TemporaryDirectory

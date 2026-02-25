@@ -49,6 +49,7 @@ class BehaviorConfig:
     audio_output_reactive: bool = True
     first_run: bool = True
     resident_mode: bool = False
+    scripted_entrance_enabled: bool = False
 
 
 @dataclass(slots=True)
@@ -273,6 +274,7 @@ class ConfigManager:
                 "audio_output_reactive": bool(config.behavior.audio_output_reactive),
                 "first_run": bool(config.behavior.first_run),
                 "resident_mode": bool(config.behavior.resident_mode),
+                "scripted_entrance_enabled": bool(config.behavior.scripted_entrance_enabled),
             },
             "vision": {
                 "camera_enabled": bool(config.vision.camera_enabled),
@@ -416,6 +418,7 @@ class ConfigManager:
             audio_output_reactive=bool(payload.get("audio_output_reactive", True)),
             first_run=bool(payload.get("first_run", True)),
             resident_mode=bool(payload.get("resident_mode", False)),
+            scripted_entrance_enabled=bool(payload.get("scripted_entrance_enabled", False)),
         )
 
     @staticmethod

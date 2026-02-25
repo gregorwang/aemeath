@@ -41,6 +41,7 @@ class SystemTrayManagerTest(unittest.TestCase):
         fired: list[str] = []
         self._manager.summon_requested.connect(lambda: fired.append("summon"))
         self._manager.invasion_debug_requested.connect(lambda: fired.append("invasion_debug"))
+        self._manager.trajectory_entrance_debug_requested.connect(lambda: fired.append("trajectory_entrance_debug"))
         self._manager.sad_comfort_debug_requested.connect(lambda: fired.append("sad_comfort_debug"))
         self._manager.no_face_debug_requested.connect(lambda: fired.append("no_face_debug"))
         self._manager.camera_check_debug_requested.connect(lambda: fired.append("camera_check_debug"))
@@ -59,6 +60,7 @@ class SystemTrayManagerTest(unittest.TestCase):
         actions_by_text = {action.text(): action for action in self._manager._menu.actions() if action.text()}
         actions_by_text["立即召唤"].trigger()
         actions_by_text["调试空闲入侵"].trigger()
+        actions_by_text["调试轨迹登场"].trigger()
         actions_by_text["调试悲伤安慰"].trigger()
         actions_by_text["调试无人脸提醒"].trigger()
         actions_by_text["调试摄像头巡检"].trigger()
@@ -79,6 +81,7 @@ class SystemTrayManagerTest(unittest.TestCase):
             [
                 "summon",
                 "invasion_debug",
+                "trajectory_entrance_debug",
                 "sad_comfort_debug",
                 "no_face_debug",
                 "camera_check_debug",

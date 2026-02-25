@@ -51,6 +51,21 @@ class TrajectoryToQtTimelineTest(unittest.TestCase):
         self.assertIn(1, states)
         self.assertIn(3, states)
 
+    def test_compresses_large_gaps_in_points_payload(self) -> None:
+        payload = {
+            "points": [
+                {"x": 0, "y": 0, "t": 0.0, "s": 1},
+                {"x": 20, "y": 20, "t": 0.2, "s": 1},
+                {"x": 40, "y": 40, "t": 5.2, "s": 2},
+            ],
+        }
+
+        converted = convert_payload(payload, source_file="gapped.json", fps=30)
+
+        self.assertLess(int(converted["duration_ms"]), 2000)
+        self.assertGreaterEqual(int(converted["duration_ms"]), 500)
+        self.assertEqual(converted["state_events"][-1]["state"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

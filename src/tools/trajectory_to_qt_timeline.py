@@ -91,6 +91,111 @@ def _resolve_total_duration_s(payload: dict[str, Any], points: list[dict[str, fl
     return max(0.0, total_duration)
 
 
+def _compress_gaps(
+    points: list[dict[str, float | int]],
+    max_gap_seconds: float = 0.5,
+) -> list[dict[str, float | int]]:
+    if len(points) < 2:
+        return list(points)
+
+    max_gap = max(0.0, float(max_gap_seconds))
+    compressed: list[dict[str, float | int]] = [points[0].copy()]
+    time_shift = 0.0
+
+    for idx in range(1, len(points)):
+        prev_t = float(points[idx - 1]["t"])
+        curr_t = float(points[idx]["t"])
+        gap = curr_t - prev_t
+        if gap > max_gap:
+            time_shift += gap - max_gap
+
+        point = points[idx].copy()
+        point["t"] = max(0.0, curr_t - time_shift)
+        compressed.append(point)
+    return compressed
+
+
+def _split_into_segments(
+    points: list[dict[str, float | int]],
+    jump_threshold_px: float = 100.0,
+) -> list[list[dict[str, float | int]]]:
+    if not points:
+        return []
+
+    threshold = max(0.0, float(jump_threshold_px))
+    segments: list[list[dict[str, float | int]]] = [[points[0]]]
+
+    for idx in range(1, len(points)):
+        prev = points[idx - 1]
+        curr = points[idx]
+        dx = float(curr["x"]) - float(prev["x"])
+        dy = float(curr["y"]) - float(prev["y"])
+        dist = (dx * dx + dy * dy) ** 0.5
+
+        if dist > threshold:
+            segments.append([curr])
+        else:
+            segments[-1].append(curr)
+    return segments
+
+
+def _smooth_points_catmull_rom(
+    points: list[dict[str, float | int]],
+    subdivisions: int = 4,
+) -> list[dict[str, float | int]]:
+    if len(points) < 3:
+        return list(points)
+
+    sub_count = max(1, int(subdivisions))
+    smoothed: list[dict[str, float | int]] = []
+    total = len(points)
+
+    for idx in range(total - 1):
+        p0 = points[max(idx - 1, 0)]
+        p1 = points[idx]
+        p2 = points[min(idx + 1, total - 1)]
+        p3 = points[min(idx + 2, total - 1)]
+
+        for sub in range(sub_count):
+            t = float(sub) / float(sub_count)
+            t2 = t * t
+            t3 = t2 * t
+
+            x = 0.5 * (
+                (2.0 * float(p1["x"]))
+                + (-float(p0["x"]) + float(p2["x"])) * t
+                + (2.0 * float(p0["x"]) - 5.0 * float(p1["x"]) + 4.0 * float(p2["x"]) - float(p3["x"])) * t2
+                + (-float(p0["x"]) + 3.0 * float(p1["x"]) - 3.0 * float(p2["x"]) + float(p3["x"])) * t3
+            )
+            y = 0.5 * (
+                (2.0 * float(p1["y"]))
+                + (-float(p0["y"]) + float(p2["y"])) * t
+                + (2.0 * float(p0["y"]) - 5.0 * float(p1["y"]) + 4.0 * float(p2["y"]) - float(p3["y"])) * t2
+                + (-float(p0["y"]) + 3.0 * float(p1["y"]) - 3.0 * float(p2["y"]) + float(p3["y"])) * t3
+            )
+            t_value = float(p1["t"]) + (float(p2["t"]) - float(p1["t"])) * t
+            smoothed.append({"x": x, "y": y, "t": t_value, "s": int(p1.get("s", 1))})
+
+    smoothed.append(points[-1].copy())
+    return smoothed
+
+
+def _smooth_segments(
+    points: list[dict[str, float | int]],
+    subdivisions: int = 4,
+    jump_threshold_px: float = 100.0,
+) -> list[dict[str, float | int]]:
+    segments = _split_into_segments(points, jump_threshold_px=jump_threshold_px)
+    result: list[dict[str, float | int]] = []
+
+    for segment in segments:
+        if len(segment) >= 3:
+            result.extend(_smooth_points_catmull_rom(segment, subdivisions=subdivisions))
+        else:
+            result.extend(segment)
+    return result
+
+
 def _interpolate_points(
     points: list[dict[str, float | int]], duration_s: float, fps: int
 ) -> list[dict[str, int | float]]:
@@ -174,6 +279,10 @@ def convert_payload(
     points = _sanitize_points(_extract_points(payload))
     if not points:
         raise ValueError("Input trajectory has no valid points/keyframes.")
+
+    points = _compress_gaps(points, max_gap_seconds=0.5)
+    points = _smooth_segments(points, subdivisions=4, jump_threshold_px=100.0)
+    points = _sanitize_points(points)
 
     duration_s = _resolve_total_duration_s(payload, points)
     keyframes = _interpolate_points(points, duration_s, normalized_fps)

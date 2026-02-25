@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from core.director import Director
+from core.director import Director, ScriptedEntranceError
 from core.state_machine import EntityState
 
 
@@ -32,6 +32,9 @@ class _ManualDebugSubject:
         self.no_face_calls = 0
         self.periodic_scan_start_calls = 0
         self.summon_calls = 0
+        self.trajectory_start_calls = 0
+        self.trajectory_start_result = True
+        self.trajectory_start_error = False
 
     def _trigger_sad_comfort(self) -> None:
         self.sad_comfort_calls += 1
@@ -49,6 +52,12 @@ class _ManualDebugSubject:
         _ = (source, debug_mode)
         self.periodic_scan_start_calls += 1
         return True
+
+    def _try_start_voice_scripted_entrance(self) -> bool:
+        self.trajectory_start_calls += 1
+        if self.trajectory_start_error:
+            raise ScriptedEntranceError("test trajectory error")
+        return bool(self.trajectory_start_result)
 
 
 class DirectorManualDebugTriggerTest(unittest.TestCase):
@@ -141,6 +150,40 @@ class DirectorManualDebugTriggerTest(unittest.TestCase):
         self.assertFalse(result)
         single_shot.assert_not_called()
         self.assertEqual(subject.periodic_scan_start_calls, 0)
+
+    def test_trigger_trajectory_entrance_debug_returns_false_when_voice_trajectory_active(self) -> None:
+        subject = _ManualDebugSubject(voice_trajectory_playing=True)
+
+        result = Director.trigger_trajectory_entrance_debug(subject, source="test")
+
+        self.assertFalse(result)
+        self.assertEqual(subject.trajectory_start_calls, 0)
+
+    def test_trigger_trajectory_entrance_debug_returns_false_when_fleeing(self) -> None:
+        subject = _ManualDebugSubject(state=EntityState.FLEEING)
+
+        result = Director.trigger_trajectory_entrance_debug(subject, source="test")
+
+        self.assertFalse(result)
+        self.assertEqual(subject.trajectory_start_calls, 0)
+
+    def test_trigger_trajectory_entrance_debug_starts_scripted_entrance(self) -> None:
+        subject = _ManualDebugSubject()
+        subject.trajectory_start_result = True
+
+        result = Director.trigger_trajectory_entrance_debug(subject, source="test")
+
+        self.assertTrue(result)
+        self.assertEqual(subject.trajectory_start_calls, 1)
+
+    def test_trigger_trajectory_entrance_debug_returns_false_when_start_fails(self) -> None:
+        subject = _ManualDebugSubject()
+        subject.trajectory_start_error = True
+
+        result = Director.trigger_trajectory_entrance_debug(subject, source="test")
+
+        self.assertFalse(result)
+        self.assertEqual(subject.trajectory_start_calls, 1)
 
 
 if __name__ == "__main__":

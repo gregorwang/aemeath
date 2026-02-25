@@ -383,6 +383,20 @@ def main() -> int:
             logger.warning("[IdleInvasion] debug trigger no-op source=%s", source)
             _notify("空闲入侵调试", "触发失败，请检查 GIF 资源与当前屏幕。", timeout_ms=4200)
 
+    def _trigger_trajectory_entrance_debug(source: str) -> None:
+        try:
+            started = bool(director.trigger_trajectory_entrance_debug(source=source))
+        except Exception as exc:
+            logger.exception("[TrajectoryEntrance] debug trigger failed source=%s: %s", source, exc)
+            _notify("轨迹登场调试失败", f"{exc}", timeout_ms=4200)
+            return
+        if started:
+            logger.info("[TrajectoryEntrance] debug trigger success source=%s", source)
+            _notify("轨迹登场调试", "已触发轨迹登场播放。", timeout_ms=2200)
+        else:
+            logger.warning("[TrajectoryEntrance] debug trigger skipped source=%s", source)
+            _notify("轨迹登场调试", "触发已跳过（可能在退场或轨迹已播放中）。", timeout_ms=3200)
+
     def _trigger_sad_comfort_debug(source: str) -> None:
         try:
             started = bool(director.trigger_sad_comfort_debug(source=source))
@@ -619,6 +633,7 @@ def main() -> int:
         tray_manager.update_characters(manifests)
         tray_manager.summon_requested.connect(lambda: _summon_now_or_notify("tray"))
         tray_manager.invasion_debug_requested.connect(lambda: _trigger_idle_invasion_debug("tray"))
+        tray_manager.trajectory_entrance_debug_requested.connect(lambda: _trigger_trajectory_entrance_debug("tray"))
         tray_manager.sad_comfort_debug_requested.connect(lambda: _trigger_sad_comfort_debug("tray"))
         tray_manager.no_face_debug_requested.connect(lambda: _trigger_no_face_debug("tray"))
         tray_manager.camera_check_debug_requested.connect(lambda: _trigger_camera_check_debug("tray"))
@@ -664,6 +679,7 @@ def main() -> int:
         toggle_action = menu.addAction("显示/隐藏")
         summon_action = menu.addAction("立即召唤")
         invasion_debug_action = menu.addAction("调试空闲入侵")
+        trajectory_entrance_debug_action = menu.addAction("调试轨迹登场")
         sad_comfort_debug_action = menu.addAction("调试悲伤安慰")
         no_face_debug_action = menu.addAction("调试无人脸提醒")
         periodic_camera_debug_action = menu.addAction("调试摄像头巡检")
@@ -688,6 +704,8 @@ def main() -> int:
             _summon_now_or_notify("context_menu")
         elif chosen == invasion_debug_action:
             _trigger_idle_invasion_debug("context_menu")
+        elif chosen == trajectory_entrance_debug_action:
+            _trigger_trajectory_entrance_debug("context_menu")
         elif chosen == sad_comfort_debug_action:
             _trigger_sad_comfort_debug("context_menu")
         elif chosen == no_face_debug_action:

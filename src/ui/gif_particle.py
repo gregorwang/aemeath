@@ -294,7 +294,7 @@ class TrajectoryPlayer(QWidget):
         self._timeline = QVariantAnimation(self)
         self._timeline.setStartValue(0.0)
         self._timeline.setEndValue(1.0)
-        self._timeline.setEasingCurve(QEasingCurve.Type.Linear)
+        self._timeline.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self._timeline.valueChanged.connect(self._on_timeline_value_changed)
         self._timeline.finished.connect(self._on_timeline_finished)
 

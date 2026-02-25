@@ -12,6 +12,7 @@ class SystemTrayManager(QObject):
 
     summon_requested = Signal()
     invasion_debug_requested = Signal()
+    trajectory_entrance_debug_requested = Signal()
     sad_comfort_debug_requested = Signal()
     no_face_debug_requested = Signal()
     camera_check_debug_requested = Signal()
@@ -65,6 +66,11 @@ class SystemTrayManager(QObject):
         """Build static tray actions."""
         self._add_action("立即召唤", self.summon_requested.emit, tooltip="立即显示角色并触发互动。")
         self._add_action("调试空闲入侵", self.invasion_debug_requested.emit, tooltip="立即触发空闲入侵效果用于调试。")
+        self._add_action(
+            "调试轨迹登场",
+            self.trajectory_entrance_debug_requested.emit,
+            tooltip="立即触发一次剧本式轨迹登场。",
+        )
         self._add_action("调试悲伤安慰", self.sad_comfort_debug_requested.emit, tooltip="立即触发一次悲伤安慰语音。")
         self._add_action("调试无人脸提醒", self.no_face_debug_requested.emit, tooltip="立即触发一次无人脸提醒语音。")
         self._add_action("调试摄像头巡检", self.camera_check_debug_requested.emit, tooltip="立即执行一次摄像头巡检流程。")

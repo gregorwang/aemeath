@@ -1,0 +1,79 @@
+{
+  "trajectories": [
+    {
+      "filename": "trajectory_1771029879_qt_animation.json",
+      "source": "trajectory_1771029879.json",
+      "description": "三段从左侧入场的复合轨迹（aemeath→state2→state1）",
+      "entry_direction": "left",
+      "duration_seconds": 35.37,
+      "states_used": [
+        1,
+        2,
+        8
+      ],
+      "trigger_condition": "voice_summon",
+      "notes": "断点之间有较长空白，建议通过转换工具压缩间隔。"
+    },
+    {
+      "filename": "trajectory_1770800738_qt_animation.json",
+      "source": "trajectory_1770800738_optimized.json",
+      "description": "从左下角斜向右上入场的轨迹",
+      "entry_direction": "bottom-left",
+      "duration_seconds": 12.27,
+      "states_used": [
+        1,
+        2
+      ],
+      "trigger_condition": "unbound",
+      "notes": "经过转换工具优化的版本。"
+    },
+    {
+      "filename": "trajectory_1771029879.json",
+      "source": "trajectory_1771029879.json",
+      "description": "原始手绘轨迹（未转换）",
+      "entry_direction": "left",
+      "duration_seconds": 35.37,
+      "states_used": [
+        1,
+        2,
+        8
+      ],
+      "trigger_condition": "manual_recording",
+      "notes": "建议先转换为 qt.animation.timeline.v1 再播放。"
+    }
+  ],
+  "state_mapping": {
+    "1": {
+      "gif": "state1.gif",
+      "label": "默认/中性"
+    },
+    "2": {
+      "gif": "state2.gif",
+      "label": "行走"
+    },
+    "3": {
+      "gif": "state3.gif",
+      "label": "思考/等待"
+    },
+    "4": {
+      "gif": "state4.gif",
+      "label": "生气"
+    },
+    "5": {
+      "gif": "state5.gif",
+      "label": "悲伤/观察"
+    },
+    "6": {
+      "gif": "state6.gif",
+      "label": "开心"
+    },
+    "7": {
+      "gif": "state7.gif",
+      "label": "惊讶/特殊"
+    },
+    "8": {
+      "gif": "aemeath.gif",
+      "label": "主角色"
+    }
+  }
+}

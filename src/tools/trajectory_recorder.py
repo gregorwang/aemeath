@@ -4,9 +4,19 @@ import json
 import time
 import argparse
 from pathlib import Path
+from typing import Any
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
 from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QFont
+
+try:
+    from core.character_states import CHARACTER_STATES, get_gif_filename, get_state_label
+except ModuleNotFoundError:
+    SRC_ROOT = Path(__file__).resolve().parents[1]
+    if str(SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(SRC_ROOT))
+    from core.character_states import CHARACTER_STATES, get_gif_filename, get_state_label
+
 
 class TrajectoryRecorder(QWidget):
     def __init__(self, initial_state=1):
@@ -26,21 +36,16 @@ class TrajectoryRecorder(QWidget):
         # 当前选中的状态（支持自定义）
         self.current_state_id = max(0, min(9, initial_state))  # 限制在 0-9 范围内
         
-        # 自定义 GIF 映射表（可扩展）
-        # 按键 0-9 对应的 GIF 文件名（相对于 characters/ 目录）
-        self.gif_key_mapping = {
-            1: "state1.gif",
-            2: "state2.gif",
-            3: "state3.gif",
-            4: "state4.gif",
-            5: "state5.gif",
-            6: "state6.gif",
-            7: "state7.gif",
-            8: "aemeath.gif",  # 按 8 对应到 aemeath.gif
-            9: "state1.gif",   # 可自定义
-            0: "state1.gif",   # 可自定义
+        self.gif_key_mapping: dict[int, tuple[str, str]] = {
+            state_id: (get_gif_filename(state_id), get_state_label(state_id))
+            for state_id in sorted(CHARACTER_STATES)
         }
-        self.current_gif_name = self.gif_key_mapping.get(self.current_state_id, "state1.gif")
+        self.gif_key_mapping[9] = ("state1.gif", "自定义9")
+        self.gif_key_mapping[0] = ("state1.gif", "自定义0")
+        self.current_gif_name, self.current_state_label = self.gif_key_mapping.get(
+            self.current_state_id,
+            ("state1.gif", "未知"),
+        )
         
         # 视觉显示
         self.display_path = QPainterPath()
@@ -49,7 +54,7 @@ class TrajectoryRecorder(QWidget):
         print("【轨迹录制器已启动】")
         print("操作指南：")
         print("1. 按住鼠标左键：开始绘制轨迹")
-        print("2. 绘制过程中按数字键 0-9：切换角色动画 GIF (1-7:state, 8:aemeath.gif)")
+        print("2. 绘制过程中按数字键 0-9：切换角色动画状态")
         print("3. 松开鼠标左键：结束当前绘制（可再次按住进行多段录制，形成‘断点’效果）")
         print("   -> 提示：若需从左边/右边出现，可先让鼠标移入边缘，然后开始绘制。")
         print("4. 按 'S' 键：保存完整轨迹到文件")
@@ -101,9 +106,11 @@ class TrajectoryRecorder(QWidget):
             
             # 检查映射表中是否有这个按键
             if num in self.gif_key_mapping:
+                gif_name, label = self.gif_key_mapping[num]
                 self.current_state_id = num
-                self.current_gif_name = self.gif_key_mapping[num]
-                print(f"-> 切换到按键 {num}: {self.current_gif_name}")
+                self.current_gif_name = gif_name
+                self.current_state_label = label
+                print(f"-> 切换到按键 {num}: {gif_name} ({label})")
                 
                 if self.is_recording:
                     # 如果正在录制，记录这个切换点
@@ -161,7 +168,7 @@ class TrajectoryRecorder(QWidget):
                 painter.setBrush(QColor(255, 200, 0)) # 黄色点表示切换
                 painter.drawEllipse(pt, 8, 8)
                 painter.setPen(QColor(255, 255, 255))
-                painter.drawText(pt.x() + 10, pt.y() - 10, f"S{state_id}")
+                painter.drawText(pt.x() + 10, pt.y() - 10, self._get_state_label(state_id))
                 
             # 恢复画笔画路径
             painter.setPen(pen)
@@ -175,37 +182,150 @@ class TrajectoryRecorder(QWidget):
         # 在左上角显示当前状态提示
         painter.setPen(QColor(255, 255, 255))
         painter.setFont(QFont("Microsoft YaHei", 14))
-        status_text = f"当前 GIF: {self.current_gif_name} (按 0-9 切换)"
+        status_text = f"当前状态: {self.current_state_label} ({self.current_gif_name}) (按 0-9 切换)"
         if self.is_recording:
             status_text += " [录制中...]"
         else:
             status_text += " [等待录制] (按住左键画线)"
         painter.drawText(20, 40, status_text)
-    
+
+    def _get_state_label(self, state_id: int) -> str:
+        return self.gif_key_mapping.get(state_id, (f"state{state_id}.gif", f"状态{state_id}"))[1]
+
+    def _count_segments(self) -> int:
+        if len(self.current_path) < 2:
+            return 1
+
+        segments = 1
+        for idx in range(1, len(self.current_path)):
+            dx = float(self.current_path[idx]["x"]) - float(self.current_path[idx - 1]["x"])
+            dy = float(self.current_path[idx]["y"]) - float(self.current_path[idx - 1]["y"])
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist > 100:
+                segments += 1
+        return segments
+
+    def _resolve_entry_direction(self) -> str:
+        if not self.current_path:
+            return "unknown"
+        start_pos = self.current_path[0]
+        x = float(start_pos["x"])
+        y = float(start_pos["y"])
+        edge_px = 5.0
+        width = max(1, self.width())
+        height = max(1, self.height())
+        if x <= edge_px:
+            return "left"
+        if x >= width - edge_px:
+            return "right"
+        if y <= edge_px:
+            return "top"
+        if y >= height - edge_px:
+            return "bottom"
+        return "unknown"
+
+    def _update_manifest(
+        self,
+        *,
+        manifest_path: Path,
+        filename: str,
+        duration_seconds: float,
+        entry_direction: str,
+        states_used: list[int],
+    ) -> None:
+        manifest: dict[str, Any] = {"trajectories": [], "state_mapping": {}}
+        if manifest_path.exists():
+            try:
+                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    manifest = loaded
+            except Exception:
+                manifest = {"trajectories": [], "state_mapping": {}}
+
+        trajectories = manifest.get("trajectories")
+        if not isinstance(trajectories, list):
+            trajectories = []
+        trajectories = [item for item in trajectories if not (isinstance(item, dict) and item.get("filename") == filename)]
+        trajectories.append(
+            {
+                "filename": filename,
+                "source": filename,
+                "description": "",
+                "entry_direction": entry_direction,
+                "duration_seconds": round(float(duration_seconds), 3),
+                "states_used": list(states_used),
+                "trigger_condition": "manual_recording",
+                "notes": "Recorded via trajectory_recorder.py",
+            }
+        )
+        manifest["trajectories"] = trajectories
+
+        state_mapping: dict[str, dict[str, str]] = {}
+        for state_id, (gif_name, label) in sorted(self.gif_key_mapping.items()):
+            state_mapping[str(state_id)] = {"gif": gif_name, "label": label}
+        manifest["state_mapping"] = state_mapping
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def save_trajectory(self):
         if not self.current_path:
             print("没有路径可保存！")
             return
-            
+
         timestamp = int(time.time())
         filename = f"trajectory_{timestamp}.json"
-        
+
         # 存到项目根目录下的 recorded_paths 文件夹
-        save_dir = Path("recorded_paths") 
+        save_dir = Path("recorded_paths")
         save_dir.mkdir(exist_ok=True)
         filepath = save_dir / filename
-        
-        data = {
-            "total_points": len(self.current_path),
-            "total_duration": self.current_path[-1]['t'],
-            "points": self.current_path
+
+        states_used = sorted({int(point.get("s", 1)) for point in self.current_path})
+        entry_direction = self._resolve_entry_direction()
+        state_labels = {
+            str(state_id): {
+                "gif": self.gif_key_mapping.get(state_id, (f"state{state_id}.gif", self._get_state_label(state_id)))[0],
+                "label": self._get_state_label(state_id),
+            }
+            for state_id in states_used
         }
-        
+
+        data = {
+            "metadata": {
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "description": "",
+                "entry_direction": entry_direction,
+                "states_used": states_used,
+                "state_labels": state_labels,
+                "screen_resolution": {
+                    "width": self.width(),
+                    "height": self.height(),
+                },
+                "segments": self._count_segments(),
+            },
+            "total_points": len(self.current_path),
+            "total_duration": self.current_path[-1]["t"],
+            "points": self.current_path,
+        }
+
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            self._update_manifest(
+                manifest_path=save_dir / "manifest.json",
+                filename=filename,
+                duration_seconds=float(self.current_path[-1]["t"]),
+                entry_direction=entry_direction,
+                states_used=states_used,
+            )
             print(f"✅ 成功保存轨迹到: {filepath.absolute()}")
-            QMessageBox.information(self, "保存成功", f"文件已保存:\n{filepath.name}\n路径点: {len(self.current_path)}")
+            QMessageBox.information(
+                self,
+                "保存成功",
+                f"文件已保存:\n{filepath.name}\n"
+                f"路径点: {len(self.current_path)}\n"
+                f"入场方向: {entry_direction}\n"
+                f"使用状态: {states_used}",
+            )
         except Exception as e:
             print(f"❌ 保存失败: {e}")
 
@@ -220,8 +340,14 @@ if __name__ == "__main__":
   python trajectory_recorder.py -s 3         # 从按键 3 (state3.gif) 开始录制
   
 按键映射:
-  1-7: state1.gif ~ state7.gif
-  8: aemeath.gif
+  1: state1.gif (默认/中性)
+  2: state2.gif (行走)
+  3: state3.gif (思考/等待)
+  4: state4.gif (生气)
+  5: state5.gif (悲伤/观察)
+  6: state6.gif (开心)
+  7: state7.gif (惊讶/特殊)
+  8: aemeath.gif (主角色)
   9,0: 自定义 (在代码中修改)
         """
     )
@@ -231,7 +357,7 @@ if __name__ == "__main__":
         default=1,
         choices=range(0, 10),
         metavar='0-9',
-        help='初始 GIF 按键 (0-9)，默认为 1 (state1.gif), 8 对应 aemeath.gif'
+        help='初始状态按键 (0-9)，默认为 1 (默认/中性), 8 对应主角色'
     )
     
     args = parser.parse_args()
