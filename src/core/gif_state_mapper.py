@@ -117,13 +117,12 @@ class GifStateMapper(QObject):
             return
         excited_path = self._gif_paths.get("excited")
         if excited_path:
-            # Spawn 2 excited particles from different edges
             self._particle_manager.spawn_wave(
                 [excited_path],
-                count=2,
-                scale=0.5,
-                duration_ms=4000,
-                stagger_ms=400,
+                count=1,
+                scale=0.35,
+                duration_ms=3000,
+                stagger_ms=300,
             )
 
     @Slot()
@@ -135,9 +134,9 @@ class GifStateMapper(QObject):
         if shy_path:
             self._particle_manager.spawn_wave(
                 [shy_path],
-                count=3,
-                scale=0.4,
-                duration_ms=2000,
+                count=1,
+                scale=0.3,
+                duration_ms=1500,
                 stagger_ms=150,
                 edges="random",
             )
@@ -156,10 +155,10 @@ class GifStateMapper(QObject):
         if greeting_path:
             self._particle_manager.spawn_wave(
                 [greeting_path],
-                count=3,
-                scale=0.6,
-                duration_ms=5000,
-                stagger_ms=500,
+                count=1,
+                scale=0.4,
+                duration_ms=3500,
+                stagger_ms=400,
                 edges="random",
             )
 
@@ -174,10 +173,10 @@ class GifStateMapper(QObject):
         if paths:
             self._particle_manager.spawn_wave(
                 paths,
-                count=2,
-                scale=0.5,
-                duration_ms=6000,
-                stagger_ms=800,
+                count=1,
+                scale=0.35,
+                duration_ms=5000,
+                stagger_ms=600,
             )
 
     # ─── Audio Reaction ────────────────────────────────────────
@@ -193,16 +192,16 @@ class GifStateMapper(QObject):
         self._audio_reaction_active = True
         logger.info("[GifStateMapper] 音频检测到，开始音乐律动效果")
 
-        # Spawn initial music vibe particles
+        # Spawn initial music vibe particle
         music_path = self._gif_paths.get("music_vibe")
         ambient_path = self._gif_paths.get("ambient")
         if music_path:
             self._particle_manager.spawn_wave(
                 [music_path],
-                count=2,
-                scale=0.7,
-                duration_ms=8000,
-                stagger_ms=600,
+                count=1,
+                scale=0.4,
+                duration_ms=5000,
+                stagger_ms=400,
                 edges="random",
             )
 
@@ -234,10 +233,10 @@ class GifStateMapper(QObject):
             return
 
         # Don't overcrowd – only spawn if we're below threshold
-        if self._particle_manager.active_count < 4:
+        if self._particle_manager.active_count < 2:
             config = ParticleConfig(
                 gif_path=random.choice(paths),
-                scale=random.uniform(0.4, 0.8),
+                scale=random.uniform(0.25, 0.45),
                 duration_ms=random.randint(4000, 7000),
                 enter_duration_ms=random.randint(800, 1500),
                 exit_duration_ms=random.randint(600, 1000),
@@ -258,10 +257,10 @@ class GifStateMapper(QObject):
         if thinking_path:
             self._particle_manager.spawn_wave(
                 [thinking_path],
-                count=2,
-                scale=0.55,
-                duration_ms=5000,
-                stagger_ms=600,
+                count=1,
+                scale=0.35,
+                duration_ms=4000,
+                stagger_ms=400,
                 edges="random",
             )
 
@@ -274,10 +273,10 @@ class GifStateMapper(QObject):
         if greeting_path:
             self._particle_manager.spawn_wave(
                 [greeting_path],
-                count=2,
-                scale=0.55,
-                duration_ms=4000,
-                stagger_ms=400,
+                count=1,
+                scale=0.35,
+                duration_ms=3000,
+                stagger_ms=300,
                 edges="random",
             )
 

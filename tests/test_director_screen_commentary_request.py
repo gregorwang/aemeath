@@ -64,6 +64,7 @@ class _RequestSubject:
         self._screen_commentary_state_lock = threading.Lock()
         self._screen_commentary_active_count = 0
         self._screen_commentary_summon_pending = False
+        self._screen_commentary_session_active = False
         self._full_screen_pause = False
         self._dnd_mode = False
         self._suppress_engaged_script_once = False
@@ -140,6 +141,7 @@ class DirectorScreenCommentaryRequestTest(unittest.TestCase):
         self.assertEqual(subject._mood_system.on_engaged_calls, 1)
         self.assertEqual(subject._screen_commentator.cancel_calls, 1)
         self.assertEqual(subject._screen_commentary_active_count, 1)
+        self.assertTrue(subject._screen_commentary_session_active)
         self.assertEqual(subject.state_calls, [("state5", False)])
         self.assertEqual(subject.worker_starts, ["tray"])
 
@@ -153,6 +155,7 @@ class DirectorScreenCommentaryRequestTest(unittest.TestCase):
         self.assertEqual(subject._state_machine.current_state, EntityState.ENGAGED)
         self.assertEqual(subject.worker_starts, ["manual"])
         self.assertFalse(subject._screen_commentary_summon_pending)
+        self.assertTrue(subject._screen_commentary_session_active)
         self.assertTrue(subject._suppress_camera_once)
 
     def test_hidden_request_stops_when_summon_fails(self) -> None:
@@ -165,23 +168,28 @@ class DirectorScreenCommentaryRequestTest(unittest.TestCase):
         self.assertEqual(subject.worker_starts, [])
         self.assertEqual(subject._screen_commentary_active_count, 0)
         self.assertEqual(subject._mood_system.on_engaged_calls, 0)
+        self.assertFalse(subject._screen_commentary_session_active)
         self.assertFalse(subject._suppress_camera_once)
         single_shot.assert_not_called()
 
     def test_done_restores_state_and_decrements_active_count(self) -> None:
         subject = _RequestSubject()
         subject._screen_commentary_active_count = 2
+        subject._screen_commentary_session_active = True
 
         Director._on_screen_commentary_done(subject)
 
         self.assertEqual(subject._screen_commentary_active_count, 1)
+        self.assertFalse(subject._screen_commentary_session_active)
         self.assertEqual(subject.state_calls, [("state1", False)])
 
     def test_skipped_by_plan_speaks_power_save_hint(self) -> None:
         subject = _RequestSubject()
+        subject._screen_commentary_session_active = True
 
         Director._on_screen_commentary_skipped(subject, "llm_running=false")
 
+        self.assertFalse(subject._screen_commentary_session_active)
         self.assertEqual(len(subject._audio_manager.speak_calls), 1)
         text, priority = subject._audio_manager.speak_calls[0]
         self.assertIn("省电模式", text)
@@ -189,9 +197,11 @@ class DirectorScreenCommentaryRequestTest(unittest.TestCase):
 
     def test_failed_speaks_error_hint(self) -> None:
         subject = _RequestSubject()
+        subject._screen_commentary_session_active = True
 
         Director._on_screen_commentary_failed(subject, "network timeout")
 
+        self.assertFalse(subject._screen_commentary_session_active)
         self.assertEqual(len(subject._audio_manager.speak_calls), 1)
         text, priority = subject._audio_manager.speak_calls[0]
         self.assertIn("看屏幕失败", text)

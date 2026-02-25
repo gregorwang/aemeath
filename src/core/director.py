@@ -213,6 +213,7 @@ class Director(QObject):
         self._screen_commentary_state_lock = threading.Lock()
         self._screen_commentary_active_count = 0
         self._screen_commentary_summon_pending = False
+        self._screen_commentary_session_active = False
         self._screen_commentary_thread: QThread | None = None
         self._screen_commentary_worker: _ScreenCommentaryWorker | None = None
         self._suppress_camera_once = False
@@ -476,12 +477,14 @@ class Director(QObject):
                 self.LOGGER.info("[ScreenCommentary] Request skipped: previous request still running source=%s", source_name)
                 return
         if self._state_machine.current_state == EntityState.HIDDEN:
+            self._screen_commentary_session_active = True
             self.LOGGER.info("[ScreenCommentary] Hidden state detected, summoning first source=%s", source_name)
             # Avoid overlap between summoned idle line and upcoming commentary speech.
             self._suppress_engaged_script_once = True
             # Screen commentary only needs screenshot + LLM; skip one-shot CV spin-up on summon.
             self._suppress_camera_once = True
             if not self.summon_now():
+                self._screen_commentary_session_active = False
                 self._suppress_camera_once = False
                 self.LOGGER.warning("[ScreenCommentary] Summon failed, request aborted source=%s", source_name)
                 return
@@ -492,6 +495,7 @@ class Director(QObject):
                 lambda s=source_name: Director._request_screen_commentary_after_summon(self, source_name=s),
             )
             return
+        self._screen_commentary_session_active = True
         self.LOGGER.info("[ScreenCommentary] Requested source=%s", source_name)
         self._mood_system.on_engaged()
         self._set_entity_state_threadsafe("state5", as_base=False)
@@ -506,6 +510,7 @@ class Director(QObject):
         except Exception:
             with self._screen_commentary_state_lock:
                 self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
+            self._screen_commentary_session_active = False
             self._set_entity_state_threadsafe("state1", as_base=False)
             raise
 
@@ -544,16 +549,19 @@ class Director(QObject):
 
     @Slot(str)
     def _on_screen_commentary_skipped(self, reason: str) -> None:
+        self._screen_commentary_session_active = False
         self.LOGGER.info("[ScreenCommentary] Skipped by resource plan: %s", reason or "unknown")
         self._audio_manager.speak("我现在在省电模式，稍后再看屏幕。", priority=AudioPriority.HIGH)
 
     @Slot(str)
     def _on_screen_commentary_failed(self, message: str) -> None:
+        self._screen_commentary_session_active = False
         self.LOGGER.error("[ScreenCommentary] Failed: %s", message)
         self._audio_manager.speak("我看屏幕失败了，点托盘里的打开日志目录看看。", priority=AudioPriority.HIGH)
 
     @Slot()
     def _on_screen_commentary_done(self) -> None:
+        self._screen_commentary_session_active = False
         self._set_entity_state_threadsafe("state1", as_base=False)
         with self._screen_commentary_state_lock:
             self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
@@ -904,6 +912,10 @@ class Director(QObject):
             return
         if self._self_playback_active:
             self.LOGGER.debug("[AudioOutputMonitor] 忽略本进程语音播放触发的音频输出")
+            return
+        # 屏幕评论会话期间，TTS fallback 产生的音频不应触发粒子和模式切换
+        if getattr(self, "_screen_commentary_session_active", False):
+            self.LOGGER.debug("[AudioOutputMonitor] 屏幕评论会话进行中，跳过音频反应")
             return
         self._audio_output_active = True
         if self._gif_state_mapper and self._state_machine.current_state != EntityState.HIDDEN:
@@ -1614,7 +1626,9 @@ class Director(QObject):
         if self._gif_state_mapper is None:
             return
         if new_state in (EntityState.PEEKING, EntityState.ENGAGED):
-            self._gif_state_mapper.on_engaged()
+            # 屏幕评论触发的 summon 不需要生成兴奋粒子
+            if not getattr(self, "_screen_commentary_session_active", False):
+                self._gif_state_mapper.on_engaged()
         elif new_state == EntityState.FLEEING:
             self._gif_state_mapper.on_fleeing()
         elif new_state == EntityState.HIDDEN:

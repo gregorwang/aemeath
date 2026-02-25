@@ -225,6 +225,7 @@ class _AudioReactiveSubject:
     def __init__(self, *, state: EntityState) -> None:
         self._audio_output_reactive = True
         self._self_playback_active = False
+        self._screen_commentary_session_active = False
         self._audio_output_active = False
         self._gif_state_mapper = _AudioMapperStub()
         self._state_machine = _StateMachineStub(state)
@@ -233,6 +234,28 @@ class _AudioReactiveSubject:
 
     def _set_behavior_mode(self, mode: BehaviorMode, *, apply_visual: bool = True) -> None:
         self.behavior_modes.append(mode)
+
+
+class _ParticleMapperStub:
+    def __init__(self) -> None:
+        self.engaged_calls = 0
+        self.fleeing_calls = 0
+        self.hidden_calls = 0
+
+    def on_engaged(self) -> None:
+        self.engaged_calls += 1
+
+    def on_fleeing(self) -> None:
+        self.fleeing_calls += 1
+
+    def on_hidden(self) -> None:
+        self.hidden_calls += 1
+
+
+class _ParticleStateSubject:
+    def __init__(self, *, commentary_active: bool) -> None:
+        self._gif_state_mapper = _ParticleMapperStub()
+        self._screen_commentary_session_active = commentary_active
 
 
 class DirectorCvChainTest(unittest.TestCase):
@@ -389,6 +412,39 @@ class DirectorCvChainTest(unittest.TestCase):
         self.assertTrue(subject._audio_output_active)
         self.assertEqual(subject._gif_state_mapper.started_calls, 1)
         self.assertEqual(subject.behavior_modes, [BehaviorMode.MEDIA_PLAYING])
+
+    def test_audio_output_started_skips_when_screen_commentary_active(self) -> None:
+        subject = _AudioReactiveSubject(state=EntityState.ENGAGED)
+        subject._screen_commentary_session_active = True
+
+        Director._on_audio_output_started(subject)
+
+        self.assertFalse(subject._audio_output_active)
+        self.assertEqual(subject._gif_state_mapper.started_calls, 0)
+        self.assertEqual(subject.behavior_modes, [])
+
+    def test_state_changed_for_particles_suppresses_engaged_when_commentary_active(self) -> None:
+        subject = _ParticleStateSubject(commentary_active=True)
+
+        Director._on_state_changed_for_particles(subject, EntityState.HIDDEN, EntityState.ENGAGED)
+
+        self.assertEqual(subject._gif_state_mapper.engaged_calls, 0)
+
+    def test_state_changed_for_particles_calls_engaged_when_commentary_inactive(self) -> None:
+        subject = _ParticleStateSubject(commentary_active=False)
+
+        Director._on_state_changed_for_particles(subject, EntityState.HIDDEN, EntityState.PEEKING)
+
+        self.assertEqual(subject._gif_state_mapper.engaged_calls, 1)
+
+    def test_state_changed_for_particles_fleeing_and_hidden_still_forwarded(self) -> None:
+        subject = _ParticleStateSubject(commentary_active=True)
+
+        Director._on_state_changed_for_particles(subject, EntityState.ENGAGED, EntityState.FLEEING)
+        Director._on_state_changed_for_particles(subject, EntityState.FLEEING, EntityState.HIDDEN)
+
+        self.assertEqual(subject._gif_state_mapper.fleeing_calls, 1)
+        self.assertEqual(subject._gif_state_mapper.hidden_calls, 1)
 
 
 if __name__ == "__main__":
