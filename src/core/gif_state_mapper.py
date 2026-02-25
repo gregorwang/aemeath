@@ -247,6 +247,40 @@ class GifStateMapper(QObject):
             )
             self._particle_manager.spawn_particle(config)
 
+    # ─── Emotion / Presence Events ─────────────────────────────
+
+    @Slot()
+    def on_sad_comfort(self) -> None:
+        """Called when sad-comfort is triggered – gentle thinking particles."""
+        if not self._enabled:
+            return
+        thinking_path = self._gif_paths.get("thinking")  # state5.gif
+        if thinking_path:
+            self._particle_manager.spawn_wave(
+                [thinking_path],
+                count=2,
+                scale=0.55,
+                duration_ms=5000,
+                stagger_ms=600,
+                edges="random",
+            )
+
+    @Slot()
+    def on_user_return(self) -> None:
+        """Called when user returns after absence – greeting particles."""
+        if not self._enabled:
+            return
+        greeting_path = self._gif_paths.get("greeting")  # state6.gif
+        if greeting_path:
+            self._particle_manager.spawn_wave(
+                [greeting_path],
+                count=2,
+                scale=0.55,
+                duration_ms=4000,
+                stagger_ms=400,
+                edges="random",
+            )
+
     # ─── Ambient / Random ──────────────────────────────────────
 
     def spawn_random_ambient(self, count: int = 1) -> None:
