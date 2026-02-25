@@ -41,11 +41,13 @@ class _IdleBehaviorSubject:
         attach_idle_monitor: bool = False,
         fullscreen_pause: bool = False,
         fullscreen_running: bool = False,
+        dnd_mode: bool = False,
     ) -> None:
         self._voice_trajectory_playing = False
         self._state_machine = _StateMachineStub(state)
         self._full_screen_pause = bool(fullscreen_pause)
         self._fullscreen_running = bool(fullscreen_running)
+        self._dnd_mode = bool(dnd_mode)
         self._idle_monitor = _IdleMonitorStub() if attach_idle_monitor else None
         self._config = SimpleNamespace(
             idle_invasion=SimpleNamespace(enabled=bool(idle_invasion_enabled))
@@ -133,6 +135,21 @@ class DirectorIdleBehaviorTest(unittest.TestCase):
         self.assertEqual(subject._state_machine.transitions, [])
         self.assertEqual(subject.behavior_calls, [])
         self.assertEqual(subject.jitter_arm_calls, 1)
+        self.assertEqual(subject._idle_monitor.reset_calls, 1)
+
+    def test_dnd_mode_blocks_auto_idle_summon(self) -> None:
+        subject = _IdleBehaviorSubject(
+            idle_invasion_enabled=False,
+            attach_idle_monitor=True,
+            dnd_mode=True,
+        )
+
+        Director.on_user_idle(subject)
+
+        self.assertEqual(subject._state_machine.transitions, [])
+        self.assertEqual(subject.behavior_calls, [])
+        self.assertEqual(subject.jitter_arm_calls, 1)
+        self.assertIsNotNone(subject._idle_monitor)
         self.assertEqual(subject._idle_monitor.reset_calls, 1)
 
     def test_enters_engaged_when_idle_trigger_fires(self) -> None:

@@ -52,12 +52,30 @@ class AssetManager:
         return self.idle_scripts
 
     @property
+    def character_dir(self) -> Path:
+        return self._character_dir
+
+    @property
+    def scripts_path(self) -> Path:
+        return self._character_dir / self.SCRIPTS_FILENAME
+
+    @property
     def idle_scripts(self) -> list[Script]:
         return list(self._idle_scripts)
 
     @property
     def panic_scripts(self) -> list[Script]:
         return list(self._panic_scripts)
+
+    def reload(self) -> None:
+        self._load_scripts()
+        valid_ids = {script.id for script in self._idle_scripts}
+        valid_ids.update(script.id for script in self._panic_scripts)
+        self._last_triggered_at = {
+            script_id: timestamp
+            for script_id, timestamp in self._last_triggered_at.items()
+            if script_id in valid_ids
+        }
 
     def _load_scripts(self) -> None:
         scripts_path = self._character_dir / self.SCRIPTS_FILENAME

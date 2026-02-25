@@ -63,6 +63,7 @@ class _NoStartSubject(_DebugSubject):
 
 class _RetreatStub:
     def __init__(self) -> None:
+        self._dnd_enabled = False
         self._debug_force_mode = False
         self._idle_time_ms = 0
         self._invasion_started = False
@@ -72,6 +73,30 @@ class _RetreatStub:
 
     def _begin_retreat(self) -> None:
         self.retreat_calls += 1
+
+
+class _DndInvasionSubject:
+    def __init__(self) -> None:
+        self._dnd_enabled = False
+        self._debug_force_mode = True
+        self._idle_time_ms = 90_000
+        self._invasion_started = True
+        self._state = InvasionState.SPAWNING
+        self._spawn_timer = _TimerStub()
+        self.retreat_calls = 0
+
+    def _begin_retreat(self) -> None:
+        self.retreat_calls += 1
+
+
+class _DndIdleUpdateSubject:
+    def __init__(self) -> None:
+        self._dnd_enabled = True
+        self._debug_force_mode = False
+        self._idle_time_ms = 12_000
+        self._invasion_started = True
+        self._state = InvasionState.INACTIVE
+        self._config = SimpleNamespace(enabled=True, start_delay_ms=30_000)
 
 
 class IdleInvasionDebugTriggerTest(unittest.TestCase):
@@ -112,6 +137,26 @@ class IdleInvasionDebugTriggerTest(unittest.TestCase):
 
         self.assertEqual(subject.retreat_calls, 0)
         self.assertGreaterEqual(subject._idle_time_ms, subject._config.start_delay_ms + 10 * 60_000)
+
+    def test_set_dnd_enabled_retreats_active_invasion(self) -> None:
+        subject = _DndInvasionSubject()
+
+        IdleInvasionController.set_dnd_enabled(subject, True)
+
+        self.assertTrue(subject._dnd_enabled)
+        self.assertEqual(subject._spawn_timer.stop_calls, 1)
+        self.assertEqual(subject.retreat_calls, 1)
+        self.assertFalse(subject._debug_force_mode)
+        self.assertEqual(subject._idle_time_ms, 0)
+        self.assertFalse(subject._invasion_started)
+
+    def test_idle_updates_are_ignored_while_dnd_enabled(self) -> None:
+        subject = _DndIdleUpdateSubject()
+
+        IdleInvasionController._on_idle_time_updated(subject, 120_000)
+
+        self.assertEqual(subject._idle_time_ms, 0)
+        self.assertFalse(subject._invasion_started)
 
 
 if __name__ == "__main__":

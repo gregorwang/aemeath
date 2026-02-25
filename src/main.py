@@ -9,6 +9,15 @@ os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from PySide6.QtCore import QTimer
 
+QUICK_START_GUIDE_URL = os.environ.get(
+    "AEMEATH_QUICK_START_URL",
+    "https://github.com/gregorwang/aemeath#-快速上手",
+)
+FEEDBACK_ISSUE_URL = os.environ.get(
+    "AEMEATH_FEEDBACK_URL",
+    "https://github.com/gregorwang/aemeath/issues/new",
+)
+
 try:
     from ai.gaze_tracker import GazeTracker
     from ai.llm_provider import DummyProvider, LLMProvider, OpenAIProvider
@@ -327,6 +336,24 @@ def main() -> int:
         if tray_manager is not None:
             tray_manager.show_message(title, message, timeout_ms=timeout_ms)
 
+    def _notify_error(feature: str, detail: str, *, timeout_ms: int = 8000) -> None:
+        error_message = (
+            f"{detail}\n"
+            f"反馈: {FEEDBACK_ISSUE_URL}\n"
+            "提交前可先使用“复制最近日志”。"
+        )
+        _notify(f"{feature}出错了", error_message, timeout_ms=timeout_ms)
+
+    def _set_dnd_mode(enabled: bool, *, source: str) -> None:
+        target = bool(enabled)
+        previous = director.is_dnd_mode()
+        director.set_dnd_mode(target)
+        if tray_manager is not None:
+            tray_manager.set_dnd_checked(target)
+        if previous != target:
+            logger.info("[DND] Toggled source=%s enabled=%s", source, target)
+            _notify("请勿打扰", f"请勿打扰：已{'开启' if target else '关闭'}", timeout_ms=2200)
+
     def _summon_now_or_notify(source: str) -> bool:
         try:
             return bool(director.summon_now())
@@ -445,6 +472,55 @@ def main() -> int:
             logger.warning("Failed to open log directory: %s", exc)
             _notify("日志目录", f"打开失败，请手动查看: {target}", timeout_ms=6000)
 
+    def _copy_recent_logs() -> None:
+        try:
+            lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = lines[-50:]
+            payload = "\n".join(tail) if tail else "(日志为空)"
+            QApplication.clipboard().setText(payload)
+            _notify("日志已复制", "最近 50 行日志已复制到剪贴板。", timeout_ms=2800)
+        except Exception as exc:
+            logger.warning("Failed to copy recent logs: %s", exc)
+            _notify("复制日志失败", f"{exc}", timeout_ms=4200)
+
+    def _open_feedback_issue() -> None:
+        try:
+            import webbrowser
+
+            webbrowser.open(FEEDBACK_ISSUE_URL)
+        except Exception as exc:
+            logger.warning("Failed to open feedback url: %s", exc)
+            _notify("反馈入口", f"打开失败，请手动访问: {FEEDBACK_ISSUE_URL}", timeout_ms=6000)
+
+    def _edit_scripts_file(source: str) -> None:
+        scripts_path = asset_manager.scripts_path
+        try:
+            if not scripts_path.exists():
+                scripts_path.write_text(
+                    '{\n  "idle_events": [],\n  "panic_events": []\n}\n',
+                    encoding="utf-8",
+                )
+                logger.info("[Scripts] Created missing scripts file source=%s path=%s", source, scripts_path)
+            if sys.platform == "win32":
+                os.startfile(str(scripts_path))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(scripts_path)])
+            else:
+                subprocess.Popen(["xdg-open", str(scripts_path)])
+            _notify("台词编辑", "已打开 scripts.json，保存后点击“重载台词”生效。", timeout_ms=3200)
+        except Exception as exc:
+            logger.warning("[Scripts] Open scripts file failed source=%s path=%s error=%s", source, scripts_path, exc)
+            _notify("台词编辑失败", f"{exc}", timeout_ms=4500)
+
+    def _reload_scripts(source: str) -> None:
+        try:
+            director.reload_scripts()
+            logger.info("[Scripts] Reloaded successfully source=%s path=%s", source, asset_manager.scripts_path)
+            _notify("台词重载", "台词已重新加载。", timeout_ms=2200)
+        except Exception as exc:
+            logger.exception("[Scripts] Reload failed source=%s path=%s", source, asset_manager.scripts_path)
+            _notify("台词重载失败", f"{exc}", timeout_ms=4500)
+
     def _apply_runtime_settings(*, notify: bool = True) -> bool:
         nonlocal llm_provider, config
         if config.llm.api_key:
@@ -482,24 +558,22 @@ def main() -> int:
         return True
 
     def _on_llm_error(message: str) -> None:
-        nonlocal config
-        lowered = (message or "").lower()
-        network_like = any(
-            key in lowered
-            for key in ("timeout", "timed out", "connection", "network", "dns", "ssl", "refused", "proxy")
+        logger.warning("LLM request failed: %s", message)
+        _notify_error(
+            "屏幕解读",
+            f"AI 模型调用失败：{message}\n请检查网络连接与 API Key 配置。",
+            timeout_ms=8500,
         )
-        if not network_like or config.behavior.offline_mode:
-            return
-        logger.warning("LLM network degraded, switching to offline mode: %s", message)
-        config.behavior.offline_mode = True
-        _apply_runtime_settings(notify=False)
-        _notify("离线模式", "网络异常，已切换为本地规则回复。", timeout_ms=4500)
 
     screen_commentator.set_llm_error_callback(_on_llm_error)
 
     def _on_screen_capture_error(message: str) -> None:
         logger.warning("Screen capture failed: %s", message)
-        _notify("屏幕捕获失败", f"{message}\n日志: {log_file}", timeout_ms=6500)
+        _notify_error(
+            "屏幕捕获",
+            f"屏幕解读失败：{message}",
+            timeout_ms=8000,
+        )
 
     screen_commentator.set_capture_error_callback(_on_screen_capture_error)
 
@@ -514,20 +588,27 @@ def main() -> int:
     if QSystemTrayIcon.isSystemTrayAvailable():
         icon_path = str((base_dir / "assets" / "icon.ico").resolve()) if (base_dir / "assets" / "icon.ico").exists() else None
         tray_manager = SystemTrayManager(app, icon_path=icon_path)
+        tray_manager.set_dnd_checked(director.is_dnd_mode())
         tray_manager.update_characters(manifests)
         tray_manager.summon_requested.connect(lambda: _summon_now_or_notify("tray"))
         tray_manager.invasion_debug_requested.connect(lambda: _trigger_idle_invasion_debug("tray"))
         tray_manager.sad_comfort_debug_requested.connect(lambda: _trigger_sad_comfort_debug("tray"))
         tray_manager.no_face_debug_requested.connect(lambda: _trigger_no_face_debug("tray"))
         tray_manager.commentary_requested.connect(lambda: director.request_screen_commentary(source="tray"))
+        tray_manager.edit_scripts_requested.connect(lambda: _edit_scripts_file("tray"))
+        tray_manager.reload_scripts_requested.connect(lambda: _reload_scripts("tray"))
+        tray_manager.dnd_toggled.connect(lambda enabled: _set_dnd_mode(enabled, source="tray"))
         tray_manager.toggle_requested.connect(director.toggle_visibility)
         tray_manager.status_requested.connect(lambda: tray_manager.show_message("状态", director.get_status_summary()))
         tray_manager.open_logs_requested.connect(_open_logs_location)
+        tray_manager.copy_recent_logs_requested.connect(_copy_recent_logs)
+        tray_manager.feedback_requested.connect(_open_feedback_issue)
         tray_manager.quit_requested.connect(app.quit)
 
         tray_manager.settings_requested.connect(_open_settings)
 
         def _switch_character(character_id: str) -> None:
+            nonlocal asset_manager
             pkg = loader.load_character(character_id)
             if pkg is None:
                 tray_manager.show_message("切换角色", f"角色加载失败: {character_id}")
@@ -543,6 +624,7 @@ def main() -> int:
                 ascii_renderer=local_renderer,
                 voice=str(pkg.manifest.get("default_voice", character_voice)),
             )
+            asset_manager = local_asset_mgr
             if hasattr(entity_window, "set_state_asset_root"):
                 entity_window.set_state_asset_root(_resolve_state_asset_root(pkg.root_dir))
             if hasattr(entity_window, "preload_state_movies"):
@@ -561,7 +643,14 @@ def main() -> int:
         sad_comfort_debug_action = menu.addAction("调试悲伤安慰")
         no_face_debug_action = menu.addAction("调试无人脸提醒")
         commentary_action = menu.addAction("你在看什么？")
+        edit_scripts_action = menu.addAction("编辑台词")
+        reload_scripts_action = menu.addAction("重载台词")
+        dnd_action = menu.addAction("请勿打扰")
+        dnd_action.setCheckable(True)
+        dnd_action.setChecked(director.is_dnd_mode())
         open_logs_action = menu.addAction("打开日志目录")
+        copy_recent_logs_action = menu.addAction("复制最近日志")
+        feedback_action = menu.addAction("反馈问题")
         settings_action = menu.addAction("设置")
         menu.addSeparator()
         quit_action = menu.addAction("退出")
@@ -579,8 +668,18 @@ def main() -> int:
             _trigger_no_face_debug("context_menu")
         elif chosen == commentary_action:
             director.request_screen_commentary(source="context_menu")
+        elif chosen == edit_scripts_action:
+            _edit_scripts_file("context_menu")
+        elif chosen == reload_scripts_action:
+            _reload_scripts("context_menu")
+        elif chosen == dnd_action:
+            _set_dnd_mode(dnd_action.isChecked(), source="context_menu")
         elif chosen == open_logs_action:
             _open_logs_location()
+        elif chosen == copy_recent_logs_action:
+            _copy_recent_logs()
+        elif chosen == feedback_action:
+            _open_feedback_issue()
         elif chosen == settings_action:
             _open_settings()
         elif chosen == quit_action:
@@ -591,7 +690,11 @@ def main() -> int:
 
     def _on_camera_error(message: str) -> None:
         logger.warning("Camera degraded (session only): %s", message)
-        _notify("视觉降级", f"{message}\n本次会话已暂停摄像头，可在设置中重试。\n日志: {log_file}", timeout_ms=6500)
+        _notify_error(
+            "摄像头",
+            f"摄像头运行异常：{message}\n本次会话已暂停摄像头，可在设置中重试。",
+            timeout_ms=8000,
+        )
 
     def _on_camera_state_changed(running: bool) -> None:
         logger.info("Camera state changed: %s", "running" if running else "stopped")
@@ -645,6 +748,20 @@ def main() -> int:
         _startup_parts.append("调试模式: 开 (转写结果将以通知显示)")
         _startup_parts.append(f"日志文件: {log_file}")
     _notify("赛博伴侣已启动", "\n".join(_startup_parts), timeout_ms=4000)
+    if bool(getattr(config.behavior, "first_run", False)):
+        logger.info("[Onboarding] First run detected, opening quick start guide.")
+        _notify("欢迎使用赛博伴侣", "正在打开快速上手指南...", timeout_ms=4500)
+        config.behavior.first_run = False
+        if not config_manager.save(config):
+            logger.warning("[Onboarding] Failed to persist first_run flag.")
+            _notify("引导状态保存失败", "首次引导状态保存失败，可能下次仍会弹出。", timeout_ms=4500)
+        try:
+            import webbrowser
+
+            webbrowser.open(QUICK_START_GUIDE_URL)
+        except Exception as exc:
+            logger.exception("[Onboarding] Failed to open quick start guide: %s", exc)
+            _notify("打开指南失败", f"请手动打开: {QUICK_START_GUIDE_URL}", timeout_ms=6500)
 
     if splash is not None:
         try:

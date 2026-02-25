@@ -108,10 +108,19 @@ class Director(QObject):
     SAD_COMFORT_VOICE_RATE = "-40%"
     SAD_COMFORT_COOLDOWN_SECONDS = 5 * 60
     SAD_COMFORT_MIN_SCORE = 0.6
-    NO_FACE_TEST_TEXT = "我暂时看不到你，等你回来。"
     NO_FACE_TEST_MIN_ABSENCE_SECONDS = 3.0
     NO_FACE_TEST_COOLDOWN_SECONDS = 20.0
+    USER_RETURN_MIN_SPEAK_SECONDS = 30.0
+    USER_RETURN_MEDIUM_THRESHOLD_SECONDS = 5 * 60.0
+    USER_RETURN_LONG_THRESHOLD_SECONDS = 30 * 60.0
+    USER_RETURN_SHORT_TEXTS = ("回来啦~", "欸你回来了。")
+    USER_RETURN_MEDIUM_TEXTS = (
+        "你去了{minutes}分钟哦，我一直在等你呢。",
+        "去了{minutes}分钟，还以为你把我忘了。",
+    )
+    USER_RETURN_LONG_TEXTS = ("你离开了好久！去做什么了？", "终于回来了！我都快睡着了。")
     PASSIVE_COMPANION_DURATION_MS = 30_000
+    SCREEN_COMMENTARY_SUMMON_DELAY_MS = 800
     EXPRESSION_STATE_MAP = {
         "happy": "state6",
         "neutral": "state1",
@@ -159,6 +168,7 @@ class Director(QObject):
         self._full_screen_pause = bool(app_config.behavior.full_screen_pause) if app_config else True
         self._audio_output_reactive = bool(app_config.behavior.audio_output_reactive) if app_config else True
         self._preferred_position = (app_config.appearance.position if app_config else "right").lower()
+        self._dnd_mode = False
 
         self._camera_enabled = bool(getattr(getattr(app_config, "vision", None), "camera_enabled", False))
         self._camera_consent = bool(getattr(getattr(app_config, "vision", None), "camera_consent_granted", False))
@@ -175,6 +185,7 @@ class Director(QObject):
         self._last_expression_visual_at = 0.0
         self._last_sad_comfort_at = 0.0
         self._no_face_absent_since: float | None = None
+        self._user_left_at: float | None = None
         self._last_no_face_test_at = 0.0
         self._no_face_streak_triggered = False
 
@@ -193,6 +204,7 @@ class Director(QObject):
         self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
         self._screen_commentary_state_lock = threading.Lock()
         self._screen_commentary_active_count = 0
+        self._screen_commentary_summon_pending = False
         self._screen_commentary_thread: QThread | None = None
         self._screen_commentary_worker: _ScreenCommentaryWorker | None = None
 
@@ -306,6 +318,12 @@ class Director(QObject):
             return
         if self._state_machine.current_state != EntityState.HIDDEN:
             return
+        if self._dnd_mode:
+            self.LOGGER.info("[DND] Auto idle summon skipped: dnd enabled")
+            if self._idle_monitor is not None:
+                self._idle_monitor.reset_to_standby()
+                self._arm_idle_threshold_with_jitter()
+            return
         if self._full_screen_pause and self._is_fullscreen_app_running():
             if self._idle_monitor is not None:
                 self._idle_monitor.reset_to_standby()
@@ -370,13 +388,36 @@ class Director(QObject):
             return
         source_name = (source or "manual").strip().lower() or "manual"
         if source_name == "timer":
+            if self._dnd_mode:
+                self.LOGGER.info("[DND] Auto screen commentary skipped: dnd enabled")
+                return
             if self._full_screen_pause and self._is_fullscreen_app_running():
                 self.LOGGER.info("[ScreenCommentary] Auto trigger skipped: fullscreen app running")
                 return
         with self._screen_commentary_state_lock:
+            if self._screen_commentary_summon_pending:
+                self.LOGGER.info(
+                    "[ScreenCommentary] Request skipped: summon pending source=%s",
+                    source_name,
+                )
+                return
             if self._screen_commentary_active_count > 0:
                 self.LOGGER.info("[ScreenCommentary] Request skipped: previous request still running source=%s", source_name)
                 return
+        if self._state_machine.current_state == EntityState.HIDDEN:
+            self.LOGGER.info("[ScreenCommentary] Hidden state detected, summoning first source=%s", source_name)
+            # Avoid overlap between summoned idle line and upcoming commentary speech.
+            self._suppress_engaged_script_once = True
+            if not self.summon_now():
+                self.LOGGER.warning("[ScreenCommentary] Summon failed, request aborted source=%s", source_name)
+                return
+            with self._screen_commentary_state_lock:
+                self._screen_commentary_summon_pending = True
+            QTimer.singleShot(
+                Director.SCREEN_COMMENTARY_SUMMON_DELAY_MS,
+                lambda s=source_name: Director._request_screen_commentary_after_summon(self, source_name=s),
+            )
+            return
         self.LOGGER.info("[ScreenCommentary] Requested source=%s", source_name)
         self._mood_system.on_engaged()
         self._set_entity_state_threadsafe("state5", as_base=False)
@@ -393,6 +434,11 @@ class Director(QObject):
                 self._screen_commentary_active_count = max(0, self._screen_commentary_active_count - 1)
             self._set_entity_state_threadsafe("state1", as_base=False)
             raise
+
+    def _request_screen_commentary_after_summon(self, *, source_name: str) -> None:
+        with self._screen_commentary_state_lock:
+            self._screen_commentary_summon_pending = False
+        Director.request_screen_commentary(self, source=source_name)
 
     def _start_screen_commentary_worker(self, *, source_name: str) -> None:
         if self._screen_commentator is None:
@@ -480,6 +526,17 @@ class Director(QObject):
             if script:
                 self._set_visual_from_script(script)
 
+    def reload_scripts(self) -> None:
+        if hasattr(self._asset_manager, "reload"):
+            self._asset_manager.reload()
+        self._script_engine.refresh(self._asset_manager.idle_scripts, self._asset_manager.panic_scripts)
+        self._pending_idle_script = None
+        if self._state_machine.current_state == EntityState.ENGAGED:
+            now = datetime.now()
+            script = self._script_engine.select_idle_script(now=now) or self._asset_manager.get_idle_script_for_time(now)
+            if script:
+                self._set_visual_from_script(script)
+
     def apply_runtime_config(self, app_config: AppConfig) -> None:
         self._config = app_config
         self._base_idle_threshold_ms = max(1, int(app_config.trigger.idle_threshold_seconds)) * 1000
@@ -527,6 +584,24 @@ class Director(QObject):
 
         if self._idle_invasion_controller is not None:
             self._idle_invasion_controller.apply_config(app_config.idle_invasion)
+            if hasattr(self._idle_invasion_controller, "set_dnd_enabled"):
+                self._idle_invasion_controller.set_dnd_enabled(self._dnd_mode)
+
+    @Slot(bool)
+    def set_dnd_mode(self, enabled: bool) -> None:
+        target = bool(enabled)
+        if self._dnd_mode == target:
+            return
+        self._dnd_mode = target
+        self.LOGGER.info("[DND] Mode changed: enabled=%s", self._dnd_mode)
+        if self._idle_invasion_controller is not None and hasattr(self._idle_invasion_controller, "set_dnd_enabled"):
+            self._idle_invasion_controller.set_dnd_enabled(self._dnd_mode)
+        if self._idle_monitor is not None:
+            self._idle_monitor.reset_to_standby()
+            self._arm_idle_threshold_with_jitter()
+
+    def is_dnd_mode(self) -> bool:
+        return bool(self._dnd_mode)
 
     def get_status_summary(self) -> str:
         offline_mode = bool(getattr(getattr(self._config, "behavior", None), "offline_mode", False))
@@ -539,6 +614,7 @@ class Director(QObject):
             f"心情: {self._mood_system.mood_label} ({self._mood_system.mood:.2f}) | "
             f"摄像头: {'开' if self._camera_enabled else '关'} | "
             f"语音唤醒: {'开' if wakeup_enabled else '关'} | "
+            f"请勿打扰: {'开' if self._dnd_mode else '关'} | "
             f"网络模式: {'离线' if offline_mode else '在线'}"
         )
 
@@ -1071,6 +1147,7 @@ class Director(QObject):
 
     def _reset_no_face_tracker(self) -> None:
         self._no_face_absent_since = None
+        self._user_left_at = None
         self._no_face_streak_triggered = False
 
     def _maybe_trigger_no_face_test(self, gaze_data: GazeData) -> None:
@@ -1078,14 +1155,14 @@ class Director(QObject):
             self._reset_no_face_tracker()
             return
         if gaze_data.face_detected:
-            self._reset_no_face_tracker()
+            self._maybe_greet_user_return()
             return
         if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
             self._reset_no_face_tracker()
             return
         if self._voice_trajectory_playing or self._state_machine.current_state == EntityState.FLEEING:
             return
-        if self._no_face_streak_triggered:
+        if self._user_left_at is not None:
             return
 
         now = time.monotonic()
@@ -1094,26 +1171,44 @@ class Director(QObject):
             return
         if now - self._no_face_absent_since < self.NO_FACE_TEST_MIN_ABSENCE_SECONDS:
             return
-        if now - self._last_no_face_test_at < self.NO_FACE_TEST_COOLDOWN_SECONDS:
-            return
-
-        self._last_no_face_test_at = now
+        self._user_left_at = self._no_face_absent_since
         self._no_face_streak_triggered = True
-        QTimer.singleShot(0, self._trigger_no_face_test)
+        self.LOGGER.info("[NoFaceReturn] User marked away.")
 
-    def _trigger_no_face_test(self) -> None:
-        self.LOGGER.info(
-            "[NoFaceTest] Triggered: min_absence=%.1fs cooldown=%.1fs",
-            self.NO_FACE_TEST_MIN_ABSENCE_SECONDS,
-            self.NO_FACE_TEST_COOLDOWN_SECONDS,
-        )
+    def _maybe_greet_user_return(self) -> None:
+        now = time.monotonic()
+        user_left_at = self._user_left_at
+        had_marked_absence = self._no_face_streak_triggered
+        self._reset_no_face_tracker()
+        if not had_marked_absence or user_left_at is None:
+            return
+        away_seconds = max(0.0, now - user_left_at)
+        if away_seconds < self.USER_RETURN_MIN_SPEAK_SECONDS:
+            self.LOGGER.debug("[NoFaceReturn] Skip greeting: away_seconds=%.1f under threshold", away_seconds)
+            return
+        if now - self._last_no_face_test_at < self.NO_FACE_TEST_COOLDOWN_SECONDS:
+            self.LOGGER.debug("[NoFaceReturn] Skip greeting: cooldown active")
+            return
+        self._last_no_face_test_at = now
+        QTimer.singleShot(0, lambda seconds=away_seconds: self._trigger_no_face_test(away_seconds=seconds))
+
+    def _trigger_no_face_test(self, away_seconds: float | None = None) -> None:
+        seconds = float(away_seconds) if away_seconds is not None else self.USER_RETURN_MEDIUM_THRESHOLD_SECONDS
+        self.LOGGER.info("[NoFaceReturn] Triggered: away_seconds=%.1f cooldown=%.1fs", seconds, self.NO_FACE_TEST_COOLDOWN_SECONDS)
+        minutes = max(1, int(seconds // 60))
+        if seconds < self.USER_RETURN_MEDIUM_THRESHOLD_SECONDS:
+            text = random.choice(self.USER_RETURN_SHORT_TEXTS)
+        elif seconds < self.USER_RETURN_LONG_THRESHOLD_SECONDS:
+            text = random.choice(self.USER_RETURN_MEDIUM_TEXTS).format(minutes=minutes)
+        else:
+            text = random.choice(self.USER_RETURN_LONG_TEXTS)
         try:
             self._audio_manager.speak(
-                self.NO_FACE_TEST_TEXT,
+                text,
                 priority=AudioPriority.HIGH,
             )
         except Exception as exc:
-            self.LOGGER.warning("[NoFaceTest] TTS trigger failed: %s", exc)
+            self.LOGGER.warning("[NoFaceReturn] TTS trigger failed: %s", exc)
 
     @staticmethod
     def _build_fallback_ascii(text: str) -> str:

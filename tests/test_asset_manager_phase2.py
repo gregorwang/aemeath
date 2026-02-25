@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -37,6 +39,39 @@ class AssetManagerPhase2Test(unittest.TestCase):
         self.manager._last_triggered_at[script.id] = now
         self.assertTrue(self.manager._in_cooldown(script, now + timedelta(minutes=5)))
         self.assertFalse(self.manager._in_cooldown(script, now + timedelta(minutes=11)))
+
+    def test_reload_refreshes_scripts_from_disk(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            scripts_path = root / "scripts.json"
+            scripts_path.write_text(
+                json.dumps(
+                    {
+                        "scripts": [{"id": "idle_1", "text": "old text", "time_range": "default"}],
+                        "panic_events": [{"id": "panic_1", "text": "panic old", "time_range": "default"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manager = AssetManager(root)
+            self.assertEqual(manager.scripts_path, scripts_path)
+            self.assertEqual(manager.idle_scripts[0].text, "old text")
+
+            scripts_path.write_text(
+                json.dumps(
+                    {
+                        "scripts": [{"id": "idle_1", "text": "new text", "time_range": "default"}],
+                        "panic_events": [{"id": "panic_1", "text": "panic new", "time_range": "default"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manager.reload()
+
+            self.assertEqual(manager.idle_scripts[0].text, "new text")
+            self.assertEqual(manager.panic_scripts[0].text, "panic new")
 
 
 if __name__ == "__main__":

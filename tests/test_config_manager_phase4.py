@@ -25,6 +25,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
         self.assertEqual(config.audio.tts_provider, "edge")
         self.assertIn(config.audio.asr_provider, {"openai_whisper", "google", "xai_realtime", "zhipu_asr"})
         self.assertIn(config.audio.voice_input_mode, {"continuous", "push_to_talk"})
+        self.assertIsInstance(config.behavior.first_run, bool)
 
     def test_save_and_reload_new_fields(self) -> None:
         from tempfile import TemporaryDirectory
@@ -36,6 +37,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             config.audio.microphone_enabled = True
             config.behavior.offline_mode = True
             config.behavior.audio_output_reactive = False
+            config.behavior.first_run = False
             config.wakeup.enabled = True
             config.wakeup.phrases = ("小爱同学请你出来",)
             config.llm.provider = "xai"
@@ -70,6 +72,7 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             self.assertTrue(loaded.audio.microphone_enabled)
             self.assertTrue(loaded.behavior.offline_mode)
             self.assertFalse(loaded.behavior.audio_output_reactive)
+            self.assertFalse(loaded.behavior.first_run)
             self.assertTrue(loaded.wakeup.enabled)
             self.assertEqual(loaded.wakeup.phrases, ("小爱同学请你出来",))
             self.assertEqual(loaded.llm.provider, "xai")
@@ -98,6 +101,26 @@ class ConfigManagerPhase4Test(unittest.TestCase):
             self.assertEqual(loaded.idle_invasion.cell_padding, 12)
             self.assertEqual(loaded.idle_invasion.participating_gifs, ("state1.gif", "state7.gif"))
             self.assertEqual(loaded.idle_invasion.retreat_style, "ripple")
+
+    def test_behavior_first_run_defaults_true_when_missing(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as td:
+            cfg_path = Path(td) / "config.json"
+            cfg_path.write_text(
+                """
+{
+  "behavior": {
+    "debug_mode": true
+  }
+}
+""".strip(),
+                encoding="utf-8",
+            )
+            manager = ConfigManager(cfg_path)
+            loaded = manager.load()
+            self.assertTrue(loaded.behavior.debug_mode)
+            self.assertTrue(loaded.behavior.first_run)
 
     def test_idle_invasion_retreat_style_fallback(self) -> None:
         from tempfile import TemporaryDirectory
