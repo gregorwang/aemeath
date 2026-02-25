@@ -112,6 +112,7 @@ class IdleInvasionController(QObject):
         self._idle_time_ms = 0
         self._invasion_started = False  # True once idle exceeds start_delay_ms
         self._debug_force_mode = False
+        self._dnd_enabled = False
 
         # Resolve absolute GIF paths.
         self._gif_paths: list[str] = self._resolve_gif_paths()
@@ -132,8 +133,25 @@ class IdleInvasionController(QObject):
         self._refresh_gif_sizes()
         if self._state == InvasionState.INACTIVE:
             self._invasion_started = False
-        if not config.enabled and self._state != InvasionState.INACTIVE:
+        if (not config.enabled or self._dnd_enabled) and self._state != InvasionState.INACTIVE:
             self._begin_retreat()
+
+    def set_dnd_enabled(self, enabled: bool) -> None:
+        target = bool(enabled)
+        if self._dnd_enabled == target:
+            return
+        self._dnd_enabled = target
+        LOGGER.info("[IdleInvasion] DND changed: enabled=%s", self._dnd_enabled)
+        if self._dnd_enabled:
+            self._debug_force_mode = False
+            self._idle_time_ms = 0
+            self._invasion_started = False
+            self._spawn_timer.stop()
+            if self._state in (InvasionState.SPAWNING, InvasionState.SATURATED):
+                self._begin_retreat()
+            return
+        self._idle_time_ms = 0
+        self._invasion_started = False
 
     def trigger_debug_invasion(self) -> bool:
         """Force-start invasion immediately for manual debugging."""
@@ -183,6 +201,10 @@ class IdleInvasionController(QObject):
     @Slot(int)
     def _on_idle_time_updated(self, idle_ms: int) -> None:
         """Called ~every 100 ms with the current idle time."""
+        if self._dnd_enabled:
+            self._idle_time_ms = 0
+            self._invasion_started = False
+            return
         if self._debug_force_mode:
             # In debug mode ignore "active" fallback reset and hold high idle tier.
             self._idle_time_ms = max(
