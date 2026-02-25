@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,8 +33,10 @@ from PySide6.QtWidgets import QLabel, QWidget
 
 try:
     from ui._file_helpers import normalize_asset_path, path_exists
+    from ui.sprite_animator import SpriteAnimator
 except ModuleNotFoundError:
     from ._file_helpers import normalize_asset_path, path_exists
+    from .sprite_animator import SpriteAnimator
 
 logger = logging.getLogger("CyberCompanion")
 
@@ -287,9 +290,14 @@ class TrajectoryPlayer(QWidget):
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._movie_cache: dict[int, QMovie] = {}
+        self._sprite_cache: dict[int, SpriteAnimator] = {}
         self._base_size = None
         self._current_movie: QMovie | None = None
+        self._current_sprite: SpriteAnimator | None = None
         self._current_state_id = -1
+        self._last_x: int | None = None
+        self._last_y: int | None = None
+        self._last_elapsed: float | None = None
 
         self._timeline = QVariantAnimation(self)
         self._timeline.setStartValue(0.0)
@@ -376,11 +384,18 @@ class TrajectoryPlayer(QWidget):
         return float(trajectory_data.get("total_duration", 0.0) or 0.0)
 
     def _preload_movies(self) -> None:
-        if self._movie_cache:
+        if self._movie_cache or self._sprite_cache:
             return
-        candidate_sizes: list = []
+        candidate_sizes: list[tuple[int, QSize]] = []
 
         for state_id, gif_file in self._gif_map.items():
+            sprite = self._load_sprite_for_state(state_id)
+            if sprite is not None:
+                size = sprite.frame_size
+                if not size.isEmpty():
+                    candidate_sizes.append((state_id, size))
+                continue
+
             source = normalize_asset_path(gif_file)
             if not path_exists(source):
                 continue
@@ -407,8 +422,38 @@ class TrajectoryPlayer(QWidget):
         if self._base_size is not None:
             for movie in self._movie_cache.values():
                 movie.setScaledSize(self._base_size)
+            for sprite in self._sprite_cache.values():
+                native = sprite.frame_size
+                if native.width() > 0 and native.height() > 0:
+                    sx = self._base_size.width() / native.width()
+                    sy = self._base_size.height() / native.height()
+                    sprite.set_scale(min(sx, sy))
             self._label.resize(self._base_size)
             self.resize(self._base_size)
+
+    def _load_sprite_for_state(self, state_id: int) -> SpriteAnimator | None:
+        cached = self._sprite_cache.get(state_id)
+        if cached is not None:
+            return cached
+
+        gif_file = self._gif_map.get(state_id)
+        if not gif_file:
+            return None
+
+        source = Path(normalize_asset_path(gif_file))
+        sprite_dir = source.parent / "sprites"
+        sheet_path = sprite_dir / f"{source.stem}_sheet.png"
+        meta_path = sprite_dir / f"{source.stem}_sheet.json"
+        if not sheet_path.exists():
+            return None
+
+        sprite = SpriteAnimator(parent=self)
+        if not sprite.load_from_files(str(sheet_path), str(meta_path)):
+            sprite.deleteLater()
+            return None
+        sprite.hide()
+        self._sprite_cache[state_id] = sprite
+        return sprite
 
     def start(self) -> None:
         if not self._points:
@@ -423,6 +468,9 @@ class TrajectoryPlayer(QWidget):
 
         first_pt = self._points[0]
         self.move(int(first_pt["x"]), int(first_pt["y"]))
+        self._last_x = int(first_pt["x"])
+        self._last_y = int(first_pt["y"])
+        self._last_elapsed = 0.0
 
         # Force initial state
         initial_state = int(first_pt.get("s", 1))
@@ -444,6 +492,25 @@ class TrajectoryPlayer(QWidget):
         progress = max(0.0, min(1.0, progress))
         elapsed = progress * self._total_duration
         self._update_frame(elapsed)
+
+        current_x = self.x()
+        current_y = self.y()
+        if self._last_x is not None and self._current_sprite is not None:
+            dx = current_x - self._last_x
+            if dx < 0:
+                self._current_sprite.set_flipped(True)
+            elif dx > 0:
+                self._current_sprite.set_flipped(False)
+            if self._last_elapsed is not None and self._last_y is not None:
+                dt = elapsed - self._last_elapsed
+                if dt > 0:
+                    dy = current_y - self._last_y
+                    speed = math.hypot(dx, dy) / dt
+                    target_fps = max(5.0, min(30.0, speed / 10.0))
+                    self._current_sprite.set_fps(target_fps)
+        self._last_x = current_x
+        self._last_y = current_y
+        self._last_elapsed = elapsed
 
     def _on_timeline_finished(self) -> None:
         if self._stopped:
@@ -493,6 +560,28 @@ class TrajectoryPlayer(QWidget):
             if elapsed - self._last_state_switch_elapsed < self.MIN_STATE_SWITCH_INTERVAL_S:
                 return
 
+        sprite = self._sprite_cache.get(state_id)
+        if sprite is None:
+            sprite = self._load_sprite_for_state(state_id)
+
+        if sprite is not None:
+            if self._current_movie is not None:
+                self._current_movie.stop()
+                self._current_movie = None
+            if self._current_sprite is not None and self._current_sprite is not sprite:
+                self._current_sprite.pause()
+                self._current_sprite.hide()
+
+            self._label.hide()
+            sprite.stop()
+            sprite.show()
+            sprite.play()
+            self._current_sprite = sprite
+            self._current_state_id = state_id
+            if elapsed is not None:
+                self._last_state_switch_elapsed = elapsed
+            return
+
         movie = self._movie_cache.get(state_id)
         if movie is None:
             gif_file = self._gif_map.get(state_id)
@@ -509,12 +598,18 @@ class TrajectoryPlayer(QWidget):
                 movie.setScaledSize(self._base_size)
             self._movie_cache[state_id] = movie
 
+        if self._current_sprite is not None:
+            self._current_sprite.pause()
+            self._current_sprite.hide()
+            self._current_sprite = None
+
         if self._current_movie is movie:
             return
 
         if self._current_movie:
             self._current_movie.stop()
 
+        self._label.show()
         movie.stop()
         movie.jumpToFrame(0)
         self._label.setMovie(movie)
@@ -532,6 +627,9 @@ class TrajectoryPlayer(QWidget):
         self._timeline.stop()
         for movie in self._movie_cache.values():
             movie.stop()
+        for sprite in self._sprite_cache.values():
+            sprite.stop()
+            sprite.hide()
         self.hide()
         self.finished.emit(self)
         self.deleteLater()
