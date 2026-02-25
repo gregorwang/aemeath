@@ -70,6 +70,11 @@ class GazeTracker(QThread):
             logger.error("[Vision] Dependency load failed: %s%s", missing, detail)
             self.camera_error.emit(f"缺少依赖或加载失败: {missing}{detail}")
             return
+        face_mesh_cls, face_mesh_error = self._resolve_face_mesh_cls(mp)
+        if face_mesh_cls is None:
+            logger.error("[Vision] MediaPipe FaceMesh unavailable: %s", face_mesh_error)
+            self.camera_error.emit(f"MediaPipe 不支持 FaceMesh 接口: {face_mesh_error}")
+            return
 
         dshow_backend = getattr(cv2, "CAP_DSHOW", None)
         cap = cv2.VideoCapture(self._camera_index, dshow_backend) if dshow_backend is not None else cv2.VideoCapture(self._camera_index)
@@ -86,14 +91,20 @@ class GazeTracker(QThread):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
-        face_mesh = mp.solutions.face_mesh.FaceMesh(
-            max_num_faces=1,
-            # Performance-first: iris refinement is unnecessary for the current
-            # gaze/expression features and costs extra compute.
-            refine_landmarks=self.USE_REFINE_LANDMARKS,
-            min_detection_confidence=self.MIN_DETECTION_CONFIDENCE,
-            min_tracking_confidence=0.5,
-        )
+        try:
+            face_mesh = face_mesh_cls(
+                max_num_faces=1,
+                # Performance-first: iris refinement is unnecessary for the current
+                # gaze/expression features and costs extra compute.
+                refine_landmarks=self.USE_REFINE_LANDMARKS,
+                min_detection_confidence=self.MIN_DETECTION_CONFIDENCE,
+                min_tracking_confidence=0.5,
+            )
+        except Exception as exc:
+            logger.error("[Vision] Failed to init FaceMesh: %s", exc)
+            self.camera_error.emit(f"FaceMesh 初始化失败: {exc}")
+            cap.release()
+            return
 
         frame_interval = 1.0 / self._target_fps
         logger.info("[Vision] Camera tracking started (index=%s, fps=%s)", self._camera_index, self._target_fps)
@@ -228,3 +239,19 @@ class GazeTracker(QThread):
             detail = "; ".join(f"{name}: {message}" for name, message in errors.items())
             return None, None, None, missing, detail
         return cv2, mp, np, "", ""
+
+    @staticmethod
+    def _resolve_face_mesh_cls(mp_module: Any) -> tuple[Any | None, str]:
+        solutions = getattr(mp_module, "solutions", None)
+        face_mesh_ns = getattr(solutions, "face_mesh", None) if solutions is not None else None
+        face_mesh_cls = getattr(face_mesh_ns, "FaceMesh", None) if face_mesh_ns is not None else None
+        if face_mesh_cls is not None:
+            return face_mesh_cls, ""
+        version = getattr(mp_module, "__version__", "unknown")
+        module_path = getattr(mp_module, "__file__", "unknown")
+        detail = (
+            f"未找到 mp.solutions.face_mesh.FaceMesh "
+            f"(mediapipe=={version}, module={module_path})。"
+            "请安装 mediapipe<0.10.30。"
+        )
+        return None, detail

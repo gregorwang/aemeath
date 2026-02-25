@@ -1101,7 +1101,8 @@ class Director(QObject):
         state = self._state_machine.current_state
         if face_present and state == EntityState.HIDDEN:
             self._suppress_engaged_script_once = True
-            self._suppress_camera_once = True
+            # Keep CV running after a face-triggered summon when eye tracking is enabled.
+            self._suppress_camera_once = not bool(getattr(self, "_eye_tracking_enabled", False))
             if not self.summon_now():
                 self._suppress_engaged_script_once = False
                 self._suppress_camera_once = False

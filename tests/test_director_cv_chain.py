@@ -154,6 +154,30 @@ class _ExpressionSubject:
         return True
 
 
+class _PeriodicScanVisualSubject:
+    EXPRESSION_STATE_MAP = Director.EXPRESSION_STATE_MAP
+
+    def __init__(self, *, eye_tracking_enabled: bool, state: EntityState = EntityState.HIDDEN) -> None:
+        self._state_machine = _StateMachineStub(state)
+        self._eye_tracking_enabled = bool(eye_tracking_enabled)
+        self._suppress_engaged_script_once = False
+        self._suppress_camera_once = False
+        self.summon_calls = 0
+        self.entity_state_calls: list[tuple[str, bool]] = []
+
+    def summon_now(self) -> bool:
+        self.summon_calls += 1
+        self._state_machine.current_state = EntityState.ENGAGED
+        return True
+
+    def _resolve_effective_behavior_mode(self) -> BehaviorMode:
+        return BehaviorMode.IDLE
+
+    def _set_entity_state(self, state_name: str, *, as_base: bool = True) -> bool:
+        self.entity_state_calls.append((state_name, as_base))
+        return True
+
+
 class DirectorCvChainTest(unittest.TestCase):
     def test_idle_update_refreshes_presence(self) -> None:
         subject = _PresenceRefreshSubject()
@@ -232,6 +256,24 @@ class DirectorCvChainTest(unittest.TestCase):
         self.assertEqual(subject._stable_expression, "happy")
         self.assertEqual(subject.entity_state_calls, [("state6", False)])
         self.assertEqual(subject._mood_system.deltas, [0.05])
+
+    def test_periodic_scan_visual_keeps_camera_after_hidden_summon_when_eye_tracking_enabled(self) -> None:
+        subject = _PeriodicScanVisualSubject(eye_tracking_enabled=True, state=EntityState.HIDDEN)
+
+        Director._apply_periodic_scan_visual(subject, face_present=True, emotion_label="neutral")
+
+        self.assertEqual(subject.summon_calls, 1)
+        self.assertFalse(subject._suppress_camera_once)
+        self.assertEqual(subject.entity_state_calls, [("state1", False)])
+
+    def test_periodic_scan_visual_suppresses_camera_after_hidden_summon_when_eye_tracking_disabled(self) -> None:
+        subject = _PeriodicScanVisualSubject(eye_tracking_enabled=False, state=EntityState.HIDDEN)
+
+        Director._apply_periodic_scan_visual(subject, face_present=True, emotion_label="neutral")
+
+        self.assertEqual(subject.summon_calls, 1)
+        self.assertTrue(subject._suppress_camera_once)
+        self.assertEqual(subject.entity_state_calls, [("state1", False)])
 
 
 if __name__ == "__main__":

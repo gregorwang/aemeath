@@ -7,7 +7,7 @@ pywin32>=306
 PyYAML>=6.0,<7.0
 
 # Phase 4 dependencies (enabled)
-mediapipe>=0.10.0,<1.0.0
+mediapipe>=0.10.14,<0.10.30
 matplotlib>=3.8.0,<4.0.0
 opencv-python-headless>=4.9.0,<5.0.0
 httpx>=0.27.0,<1.0.0

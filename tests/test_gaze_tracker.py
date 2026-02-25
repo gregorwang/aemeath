@@ -80,6 +80,35 @@ class GazeTrackerTest(unittest.TestCase):
         self.assertAlmostEqual(gaze.brightness, 42.5, places=3)
         self.assertAlmostEqual(gaze.motion_score, 3.2, places=3)
 
+    def test_resolve_face_mesh_cls_success(self) -> None:
+        class _FaceMesh:
+            pass
+
+        class _FaceMeshNs:
+            FaceMesh = _FaceMesh
+
+        class _Solutions:
+            face_mesh = _FaceMeshNs()
+
+        class _Mp:
+            solutions = _Solutions()
+            __version__ = "0.10.21"
+            __file__ = "fake_mediapipe.py"
+
+        cls, error = GazeTracker._resolve_face_mesh_cls(_Mp())
+        self.assertIs(cls, _FaceMesh)
+        self.assertEqual(error, "")
+
+    def test_resolve_face_mesh_cls_missing_api(self) -> None:
+        class _Mp:
+            __version__ = "0.10.32"
+            __file__ = "fake_mediapipe.py"
+
+        cls, error = GazeTracker._resolve_face_mesh_cls(_Mp())
+        self.assertIsNone(cls)
+        self.assertIn("mediapipe==0.10.32", error)
+        self.assertIn("mediapipe<0.10.30", error)
+
 
 if __name__ == "__main__":
     unittest.main()
