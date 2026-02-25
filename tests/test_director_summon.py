@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -44,6 +45,43 @@ class _SummonSubject:
         self.behavior_calls.append((mode, bool(apply_visual)))
 
 
+class _AssetManagerReloadStub:
+    def __init__(self) -> None:
+        self.reload_calls = 0
+        self.idle_scripts = [SimpleNamespace(id="idle_1")]
+        self.panic_scripts = [SimpleNamespace(id="panic_1")]
+        self.idle_pick = SimpleNamespace(id="idle_pick")
+
+    def reload(self) -> None:
+        self.reload_calls += 1
+
+    def get_idle_script_for_time(self, _now) -> object:
+        return self.idle_pick
+
+
+class _ScriptEngineReloadStub:
+    def __init__(self) -> None:
+        self.refresh_calls: list[tuple[list[object], list[object]]] = []
+
+    def refresh(self, idle_scripts, panic_scripts) -> None:
+        self.refresh_calls.append((list(idle_scripts), list(panic_scripts)))
+
+    def select_idle_script(self, *, now):
+        return None
+
+
+class _ReloadSubject:
+    def __init__(self, *, state: EntityState) -> None:
+        self._asset_manager = _AssetManagerReloadStub()
+        self._script_engine = _ScriptEngineReloadStub()
+        self._pending_idle_script = object()
+        self._state_machine = SimpleNamespace(current_state=state)
+        self.visual_calls: list[object] = []
+
+    def _set_visual_from_script(self, script) -> None:
+        self.visual_calls.append(script)
+
+
 class DirectorSummonTest(unittest.TestCase):
     def test_hidden_transitions_to_engaged(self) -> None:
         subject = _SummonSubject(state=EntityState.HIDDEN)
@@ -72,6 +110,25 @@ class DirectorSummonTest(unittest.TestCase):
         self.assertEqual(subject.behavior_calls, [])
         self.assertEqual(subject._state_machine.transitions, [])
         self.assertEqual(subject._auto_dismiss_timer.start_calls, [])
+
+    def test_reload_scripts_refreshes_engine(self) -> None:
+        subject = _ReloadSubject(state=EntityState.HIDDEN)
+
+        Director.reload_scripts(subject)
+
+        self.assertEqual(subject._asset_manager.reload_calls, 1)
+        self.assertEqual(len(subject._script_engine.refresh_calls), 1)
+        self.assertIsNone(subject._pending_idle_script)
+        self.assertEqual(subject.visual_calls, [])
+
+    def test_reload_scripts_updates_visual_when_engaged(self) -> None:
+        subject = _ReloadSubject(state=EntityState.ENGAGED)
+
+        Director.reload_scripts(subject)
+
+        self.assertEqual(subject._asset_manager.reload_calls, 1)
+        self.assertEqual(len(subject._script_engine.refresh_calls), 1)
+        self.assertEqual(subject.visual_calls, [subject._asset_manager.idle_pick])
 
 
 if __name__ == "__main__":

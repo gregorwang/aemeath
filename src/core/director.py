@@ -517,6 +517,17 @@ class Director(QObject):
             if script:
                 self._set_visual_from_script(script)
 
+    def reload_scripts(self) -> None:
+        if hasattr(self._asset_manager, "reload"):
+            self._asset_manager.reload()
+        self._script_engine.refresh(self._asset_manager.idle_scripts, self._asset_manager.panic_scripts)
+        self._pending_idle_script = None
+        if self._state_machine.current_state == EntityState.ENGAGED:
+            now = datetime.now()
+            script = self._script_engine.select_idle_script(now=now) or self._asset_manager.get_idle_script_for_time(now)
+            if script:
+                self._set_visual_from_script(script)
+
     def apply_runtime_config(self, app_config: AppConfig) -> None:
         self._config = app_config
         self._base_idle_threshold_ms = max(1, int(app_config.trigger.idle_threshold_seconds)) * 1000

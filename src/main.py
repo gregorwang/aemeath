@@ -492,6 +492,35 @@ def main() -> int:
             logger.warning("Failed to open feedback url: %s", exc)
             _notify("反馈入口", f"打开失败，请手动访问: {FEEDBACK_ISSUE_URL}", timeout_ms=6000)
 
+    def _edit_scripts_file(source: str) -> None:
+        scripts_path = asset_manager.scripts_path
+        try:
+            if not scripts_path.exists():
+                scripts_path.write_text(
+                    '{\n  "idle_events": [],\n  "panic_events": []\n}\n',
+                    encoding="utf-8",
+                )
+                logger.info("[Scripts] Created missing scripts file source=%s path=%s", source, scripts_path)
+            if sys.platform == "win32":
+                os.startfile(str(scripts_path))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(scripts_path)])
+            else:
+                subprocess.Popen(["xdg-open", str(scripts_path)])
+            _notify("台词编辑", "已打开 scripts.json，保存后点击“重载台词”生效。", timeout_ms=3200)
+        except Exception as exc:
+            logger.warning("[Scripts] Open scripts file failed source=%s path=%s error=%s", source, scripts_path, exc)
+            _notify("台词编辑失败", f"{exc}", timeout_ms=4500)
+
+    def _reload_scripts(source: str) -> None:
+        try:
+            director.reload_scripts()
+            logger.info("[Scripts] Reloaded successfully source=%s path=%s", source, asset_manager.scripts_path)
+            _notify("台词重载", "台词已重新加载。", timeout_ms=2200)
+        except Exception as exc:
+            logger.exception("[Scripts] Reload failed source=%s path=%s", source, asset_manager.scripts_path)
+            _notify("台词重载失败", f"{exc}", timeout_ms=4500)
+
     def _apply_runtime_settings(*, notify: bool = True) -> bool:
         nonlocal llm_provider, config
         if config.llm.api_key:
@@ -566,6 +595,8 @@ def main() -> int:
         tray_manager.sad_comfort_debug_requested.connect(lambda: _trigger_sad_comfort_debug("tray"))
         tray_manager.no_face_debug_requested.connect(lambda: _trigger_no_face_debug("tray"))
         tray_manager.commentary_requested.connect(lambda: director.request_screen_commentary(source="tray"))
+        tray_manager.edit_scripts_requested.connect(lambda: _edit_scripts_file("tray"))
+        tray_manager.reload_scripts_requested.connect(lambda: _reload_scripts("tray"))
         tray_manager.dnd_toggled.connect(lambda enabled: _set_dnd_mode(enabled, source="tray"))
         tray_manager.toggle_requested.connect(director.toggle_visibility)
         tray_manager.status_requested.connect(lambda: tray_manager.show_message("状态", director.get_status_summary()))
@@ -577,6 +608,7 @@ def main() -> int:
         tray_manager.settings_requested.connect(_open_settings)
 
         def _switch_character(character_id: str) -> None:
+            nonlocal asset_manager
             pkg = loader.load_character(character_id)
             if pkg is None:
                 tray_manager.show_message("切换角色", f"角色加载失败: {character_id}")
@@ -592,6 +624,7 @@ def main() -> int:
                 ascii_renderer=local_renderer,
                 voice=str(pkg.manifest.get("default_voice", character_voice)),
             )
+            asset_manager = local_asset_mgr
             if hasattr(entity_window, "set_state_asset_root"):
                 entity_window.set_state_asset_root(_resolve_state_asset_root(pkg.root_dir))
             if hasattr(entity_window, "preload_state_movies"):
@@ -610,6 +643,8 @@ def main() -> int:
         sad_comfort_debug_action = menu.addAction("调试悲伤安慰")
         no_face_debug_action = menu.addAction("调试无人脸提醒")
         commentary_action = menu.addAction("你在看什么？")
+        edit_scripts_action = menu.addAction("编辑台词")
+        reload_scripts_action = menu.addAction("重载台词")
         dnd_action = menu.addAction("请勿打扰")
         dnd_action.setCheckable(True)
         dnd_action.setChecked(director.is_dnd_mode())
@@ -633,6 +668,10 @@ def main() -> int:
             _trigger_no_face_debug("context_menu")
         elif chosen == commentary_action:
             director.request_screen_commentary(source="context_menu")
+        elif chosen == edit_scripts_action:
+            _edit_scripts_file("context_menu")
+        elif chosen == reload_scripts_action:
+            _reload_scripts("context_menu")
         elif chosen == dnd_action:
             _set_dnd_mode(dnd_action.isChecked(), source="context_menu")
         elif chosen == open_logs_action:
