@@ -483,6 +483,16 @@ def main() -> int:
             logger.warning("Failed to copy recent logs: %s", exc)
             _notify("复制日志失败", f"{exc}", timeout_ms=4200)
 
+    def _open_quick_start_guide(*, source: str) -> None:
+        try:
+            import webbrowser
+
+            webbrowser.open(QUICK_START_GUIDE_URL)
+            logger.info("[Guide] Opened quick start guide source=%s url=%s", source, QUICK_START_GUIDE_URL)
+        except Exception as exc:
+            logger.warning("[Guide] Failed to open quick start guide source=%s error=%s", source, exc)
+            _notify("打开指南失败", f"请手动打开: {QUICK_START_GUIDE_URL}", timeout_ms=6500)
+
     def _open_feedback_issue() -> None:
         try:
             import webbrowser
@@ -595,6 +605,7 @@ def main() -> int:
         tray_manager.sad_comfort_debug_requested.connect(lambda: _trigger_sad_comfort_debug("tray"))
         tray_manager.no_face_debug_requested.connect(lambda: _trigger_no_face_debug("tray"))
         tray_manager.commentary_requested.connect(lambda: director.request_screen_commentary(source="tray"))
+        tray_manager.guide_requested.connect(lambda: _open_quick_start_guide(source="tray"))
         tray_manager.edit_scripts_requested.connect(lambda: _edit_scripts_file("tray"))
         tray_manager.reload_scripts_requested.connect(lambda: _reload_scripts("tray"))
         tray_manager.dnd_toggled.connect(lambda enabled: _set_dnd_mode(enabled, source="tray"))
@@ -643,6 +654,7 @@ def main() -> int:
         sad_comfort_debug_action = menu.addAction("调试悲伤安慰")
         no_face_debug_action = menu.addAction("调试无人脸提醒")
         commentary_action = menu.addAction("你在看什么？")
+        guide_action = menu.addAction("使用指南")
         edit_scripts_action = menu.addAction("编辑台词")
         reload_scripts_action = menu.addAction("重载台词")
         dnd_action = menu.addAction("请勿打扰")
@@ -668,6 +680,8 @@ def main() -> int:
             _trigger_no_face_debug("context_menu")
         elif chosen == commentary_action:
             director.request_screen_commentary(source="context_menu")
+        elif chosen == guide_action:
+            _open_quick_start_guide(source="context_menu")
         elif chosen == edit_scripts_action:
             _edit_scripts_file("context_menu")
         elif chosen == reload_scripts_action:
@@ -755,13 +769,7 @@ def main() -> int:
         if not config_manager.save(config):
             logger.warning("[Onboarding] Failed to persist first_run flag.")
             _notify("引导状态保存失败", "首次引导状态保存失败，可能下次仍会弹出。", timeout_ms=4500)
-        try:
-            import webbrowser
-
-            webbrowser.open(QUICK_START_GUIDE_URL)
-        except Exception as exc:
-            logger.exception("[Onboarding] Failed to open quick start guide: %s", exc)
-            _notify("打开指南失败", f"请手动打开: {QUICK_START_GUIDE_URL}", timeout_ms=6500)
+        _open_quick_start_guide(source="first_run")
 
     if splash is not None:
         try:

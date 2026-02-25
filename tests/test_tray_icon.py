@@ -44,6 +44,7 @@ class SystemTrayManagerTest(unittest.TestCase):
         self._manager.sad_comfort_debug_requested.connect(lambda: fired.append("sad_comfort_debug"))
         self._manager.no_face_debug_requested.connect(lambda: fired.append("no_face_debug"))
         self._manager.commentary_requested.connect(lambda: fired.append("commentary"))
+        self._manager.guide_requested.connect(lambda: fired.append("guide"))
         self._manager.edit_scripts_requested.connect(lambda: fired.append("edit_scripts"))
         self._manager.reload_scripts_requested.connect(lambda: fired.append("reload_scripts"))
         self._manager.settings_requested.connect(lambda: fired.append("settings"))
@@ -60,6 +61,7 @@ class SystemTrayManagerTest(unittest.TestCase):
         actions_by_text["调试悲伤安慰"].trigger()
         actions_by_text["调试无人脸提醒"].trigger()
         actions_by_text["你在看什么？"].trigger()
+        actions_by_text["使用指南"].trigger()
         actions_by_text["编辑台词"].trigger()
         actions_by_text["重载台词"].trigger()
         actions_by_text["请勿打扰"].trigger()
@@ -78,6 +80,7 @@ class SystemTrayManagerTest(unittest.TestCase):
                 "sad_comfort_debug",
                 "no_face_debug",
                 "commentary",
+                "guide",
                 "edit_scripts",
                 "reload_scripts",
                 "dnd:1",

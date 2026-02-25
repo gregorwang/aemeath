@@ -70,6 +70,16 @@ class SettingsDialogConfigTest(unittest.TestCase):
         self.assertEqual(updated.audio.asr_model, "")
         self.assertEqual(updated.audio.asr_base_url, "")
 
+    def test_to_config_updates_resident_mode(self) -> None:
+        config = AppConfig()
+        config.behavior.resident_mode = False
+        dialog = self._create_dialog(config)
+
+        dialog.resident_mode_checkbox.setChecked(True)
+        updated = dialog.to_config()
+
+        self.assertTrue(updated.behavior.resident_mode)
+
 
 if __name__ == "__main__":
     unittest.main()

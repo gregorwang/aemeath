@@ -93,6 +93,7 @@ class SettingsDialog(QDialog):
         self.position_combo = QComboBox(self)
         self.position_combo.addItems(["auto", "left", "right"])
         self.fullscreen_pause_checkbox = QCheckBox("全屏应用时暂停", self)
+        self.resident_mode_checkbox = QCheckBox("角色常驻模式（全屏时自动隐藏）", self)
         self.audio_output_reactive_checkbox = QCheckBox("系统音频驱动状态/动效 (MEDIA_PLAYING)", self)
         self.debug_mode_checkbox = QCheckBox("调试模式", self)
         self.offline_mode_checkbox = QCheckBox("离线模式（禁用远程 AI）", self)
@@ -109,6 +110,7 @@ class SettingsDialog(QDialog):
         general_form.addRow("空闲触发阈值", self.idle_threshold_spin)
         general_form.addRow("自动消失时间", self.auto_dismiss_spin)
         general_form.addRow("", self.fullscreen_pause_checkbox)
+        general_form.addRow("", self.resident_mode_checkbox)
         general_form.addRow("", self.audio_output_reactive_checkbox)
         general_form.addRow("", self.debug_mode_checkbox)
         general_form.addRow("", self.offline_mode_checkbox)
@@ -346,6 +348,7 @@ class SettingsDialog(QDialog):
         self.idle_threshold_spin.setToolTip("用户无输入达到该秒数后，触发空闲互动。")
         self.auto_dismiss_spin.setToolTip("角色出现后若无进一步互动，多少秒后自动隐藏。")
         self.offline_mode_checkbox.setToolTip("开启后禁用 AI 页全部远程能力，适合纯本地运行或排障。")
+        self.resident_mode_checkbox.setToolTip("开启后角色保持常驻显示；若检测到全屏应用会自动隐藏。")
         self.invasion_enabled_checkbox.setToolTip("开启后，空闲达到阈值会触发小人入侵。")
         self.invasion_start_delay_spin.setToolTip("空闲多久后开始入侵。")
         self.invasion_initial_interval_spin.setToolTip("刚开始入侵时的生成节奏（秒）。")
@@ -545,6 +548,7 @@ class SettingsDialog(QDialog):
         self.idle_threshold_spin.setValue(max(30, int(config.trigger.idle_threshold_seconds)))
         self.auto_dismiss_spin.setValue(max(5, int(config.trigger.auto_dismiss_seconds)))
         self.fullscreen_pause_checkbox.setChecked(bool(config.behavior.full_screen_pause))
+        self.resident_mode_checkbox.setChecked(bool(config.behavior.resident_mode))
         self.audio_output_reactive_checkbox.setChecked(bool(config.behavior.audio_output_reactive))
         self.debug_mode_checkbox.setChecked(bool(config.behavior.debug_mode))
         self.offline_mode_checkbox.setChecked(bool(config.behavior.offline_mode))
@@ -608,6 +612,7 @@ class SettingsDialog(QDialog):
         behavior = replace(
             self._source.behavior,
             full_screen_pause=self.fullscreen_pause_checkbox.isChecked(),
+            resident_mode=self.resident_mode_checkbox.isChecked(),
             audio_output_reactive=self.audio_output_reactive_checkbox.isChecked(),
             debug_mode=self.debug_mode_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),

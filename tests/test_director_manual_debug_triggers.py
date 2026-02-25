@@ -24,14 +24,22 @@ class _ManualDebugSubject:
         self.LOGGER = logging.getLogger("CyberCompanionTest")
         self._voice_trajectory_playing = voice_trajectory_playing
         self._state_machine = _StateMachineStub(state)
+        self._suppress_engaged_script_once = False
         self.sad_comfort_calls = 0
         self.no_face_calls = 0
+        self.summon_calls = 0
 
     def _trigger_sad_comfort(self) -> None:
         self.sad_comfort_calls += 1
 
     def _trigger_no_face_test(self) -> None:
         self.no_face_calls += 1
+
+    def summon_now(self) -> bool:
+        self.summon_calls += 1
+        if self._state_machine.current_state == EntityState.HIDDEN:
+            self._state_machine.current_state = EntityState.ENGAGED
+        return True
 
 
 class DirectorManualDebugTriggerTest(unittest.TestCase):
@@ -80,6 +88,26 @@ class DirectorManualDebugTriggerTest(unittest.TestCase):
         self.assertFalse(result)
         single_shot.assert_not_called()
         self.assertEqual(subject.no_face_calls, 0)
+
+    def test_trigger_sad_comfort_debug_summons_when_hidden(self) -> None:
+        subject = _ManualDebugSubject(state=EntityState.HIDDEN)
+
+        with patch("core.director.QTimer.singleShot") as single_shot:
+            result = Director.trigger_sad_comfort_debug(subject, source="test")
+
+        self.assertTrue(result)
+        self.assertEqual(subject.summon_calls, 1)
+        single_shot.assert_called_once()
+
+    def test_trigger_no_face_test_debug_summons_when_hidden(self) -> None:
+        subject = _ManualDebugSubject(state=EntityState.HIDDEN)
+
+        with patch("core.director.QTimer.singleShot") as single_shot:
+            result = Director.trigger_no_face_test_debug(subject, source="test")
+
+        self.assertTrue(result)
+        self.assertEqual(subject.summon_calls, 1)
+        single_shot.assert_called_once()
 
 
 if __name__ == "__main__":

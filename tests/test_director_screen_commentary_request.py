@@ -67,6 +67,7 @@ class _RequestSubject:
         self._full_screen_pause = False
         self._dnd_mode = False
         self._suppress_engaged_script_once = False
+        self._suppress_camera_once = False
         self._resource_scheduler = object()
         self._state_machine = SimpleNamespace(current_state=state)
         self._summon_result = bool(summon_result)
@@ -152,6 +153,7 @@ class DirectorScreenCommentaryRequestTest(unittest.TestCase):
         self.assertEqual(subject._state_machine.current_state, EntityState.ENGAGED)
         self.assertEqual(subject.worker_starts, ["manual"])
         self.assertFalse(subject._screen_commentary_summon_pending)
+        self.assertTrue(subject._suppress_camera_once)
 
     def test_hidden_request_stops_when_summon_fails(self) -> None:
         subject = _RequestSubject(state=EntityState.HIDDEN, summon_result=False)
@@ -163,6 +165,7 @@ class DirectorScreenCommentaryRequestTest(unittest.TestCase):
         self.assertEqual(subject.worker_starts, [])
         self.assertEqual(subject._screen_commentary_active_count, 0)
         self.assertEqual(subject._mood_system.on_engaged_calls, 0)
+        self.assertFalse(subject._suppress_camera_once)
         single_shot.assert_not_called()
 
     def test_done_restores_state_and_decrements_active_count(self) -> None:

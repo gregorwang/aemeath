@@ -48,6 +48,7 @@ class BehaviorConfig:
     offline_mode: bool = False
     audio_output_reactive: bool = True
     first_run: bool = True
+    resident_mode: bool = False
 
 
 @dataclass(slots=True)
@@ -269,6 +270,7 @@ class ConfigManager:
                 "offline_mode": bool(config.behavior.offline_mode),
                 "audio_output_reactive": bool(config.behavior.audio_output_reactive),
                 "first_run": bool(config.behavior.first_run),
+                "resident_mode": bool(config.behavior.resident_mode),
             },
             "vision": {
                 "camera_enabled": bool(config.vision.camera_enabled),
@@ -409,6 +411,7 @@ class ConfigManager:
             offline_mode=bool(payload.get("offline_mode", False)),
             audio_output_reactive=bool(payload.get("audio_output_reactive", True)),
             first_run=bool(payload.get("first_run", True)),
+            resident_mode=bool(payload.get("resident_mode", False)),
         )
 
     @staticmethod

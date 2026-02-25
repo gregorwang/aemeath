@@ -167,6 +167,7 @@ class Director(QObject):
         self._auto_dismiss_ms = max(1, int(app_config.trigger.auto_dismiss_seconds)) * 1000 if app_config else 30_000
         self._full_screen_pause = bool(app_config.behavior.full_screen_pause) if app_config else True
         self._audio_output_reactive = bool(app_config.behavior.audio_output_reactive) if app_config else True
+        self._resident_mode = bool(getattr(getattr(app_config, "behavior", None), "resident_mode", False)) if app_config else False
         self._preferred_position = (app_config.appearance.position if app_config else "right").lower()
         self._dnd_mode = False
 
@@ -207,6 +208,7 @@ class Director(QObject):
         self._screen_commentary_summon_pending = False
         self._screen_commentary_thread: QThread | None = None
         self._screen_commentary_worker: _ScreenCommentaryWorker | None = None
+        self._suppress_camera_once = False
 
         self._gaze_tracker = gaze_tracker
         if self._camera_enabled and not self._camera_consent:
@@ -311,10 +313,14 @@ class Director(QObject):
         idle_monitor.idle_time_updated.connect(self._on_idle_time_updated)
         self._arm_idle_threshold_with_jitter()
         idle_monitor.reset_to_standby()
+        Director._sync_resident_visibility(self)
 
     @Slot()
     def on_user_idle(self) -> None:
         if self._voice_trajectory_playing:
+            return
+        if Director._is_resident_mode_enabled(self):
+            Director._sync_resident_visibility(self)
             return
         if self._state_machine.current_state != EntityState.HIDDEN:
             return
@@ -341,6 +347,17 @@ class Director(QObject):
 
     @Slot()
     def on_user_active(self) -> None:
+        if Director._is_resident_mode_enabled(self):
+            self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
+            self._passive_presence_active = False
+            self._deep_sleep_active = False
+            timer = getattr(self, "_passive_presence_timer", None)
+            if timer is not None and timer.isActive():
+                timer.stop()
+            Director._sync_resident_visibility(self)
+            if self._idle_monitor is not None:
+                self._idle_monitor.reset_to_standby()
+            return
         self._set_behavior_mode(BehaviorMode.BUSY)
         state = self._state_machine.current_state
         if self._passive_presence_active or self._deep_sleep_active:
@@ -366,6 +383,12 @@ class Director(QObject):
         if self._state_machine.current_state == EntityState.FLEEING:
             self.LOGGER.info("[EmotionComfort] Debug trigger skipped: state=fleeing source=%s", source_name)
             return False
+        if self._state_machine.current_state == EntityState.HIDDEN:
+            self._suppress_engaged_script_once = True
+            if not self.summon_now():
+                self._suppress_engaged_script_once = False
+                self.LOGGER.info("[EmotionComfort] Debug trigger skipped: summon failed source=%s", source_name)
+                return False
         self.LOGGER.info("[EmotionComfort] Debug trigger requested source=%s", source_name)
         QTimer.singleShot(0, self._trigger_sad_comfort)
         return True
@@ -378,6 +401,12 @@ class Director(QObject):
         if self._state_machine.current_state == EntityState.FLEEING:
             self.LOGGER.info("[NoFaceTest] Debug trigger skipped: state=fleeing source=%s", source_name)
             return False
+        if self._state_machine.current_state == EntityState.HIDDEN:
+            self._suppress_engaged_script_once = True
+            if not self.summon_now():
+                self._suppress_engaged_script_once = False
+                self.LOGGER.info("[NoFaceTest] Debug trigger skipped: summon failed source=%s", source_name)
+                return False
         self.LOGGER.info("[NoFaceTest] Debug trigger requested source=%s", source_name)
         QTimer.singleShot(0, self._trigger_no_face_test)
         return True
@@ -408,7 +437,10 @@ class Director(QObject):
             self.LOGGER.info("[ScreenCommentary] Hidden state detected, summoning first source=%s", source_name)
             # Avoid overlap between summoned idle line and upcoming commentary speech.
             self._suppress_engaged_script_once = True
+            # Screen commentary only needs screenshot + LLM; skip one-shot CV spin-up on summon.
+            self._suppress_camera_once = True
             if not self.summon_now():
+                self._suppress_camera_once = False
                 self.LOGGER.warning("[ScreenCommentary] Summon failed, request aborted source=%s", source_name)
                 return
             with self._screen_commentary_state_lock:
@@ -544,6 +576,7 @@ class Director(QObject):
         self._auto_dismiss_ms = max(1, int(app_config.trigger.auto_dismiss_seconds)) * 1000
         self._full_screen_pause = bool(app_config.behavior.full_screen_pause)
         self._audio_output_reactive = bool(app_config.behavior.audio_output_reactive)
+        self._resident_mode = bool(getattr(app_config.behavior, "resident_mode", False))
         self._preferred_position = (app_config.appearance.position or "auto").lower()
         self._auto_screen_commentary_enabled = bool(app_config.screen_commentary.auto_enabled)
         self._auto_screen_commentary_interval_ms = self._resolve_auto_screen_commentary_interval_ms(app_config)
@@ -586,6 +619,7 @@ class Director(QObject):
             self._idle_invasion_controller.apply_config(app_config.idle_invasion)
             if hasattr(self._idle_invasion_controller, "set_dnd_enabled"):
                 self._idle_invasion_controller.set_dnd_enabled(self._dnd_mode)
+        Director._sync_resident_visibility(self)
 
     @Slot(bool)
     def set_dnd_mode(self, enabled: bool) -> None:
@@ -596,9 +630,17 @@ class Director(QObject):
         self.LOGGER.info("[DND] Mode changed: enabled=%s", self._dnd_mode)
         if self._idle_invasion_controller is not None and hasattr(self._idle_invasion_controller, "set_dnd_enabled"):
             self._idle_invasion_controller.set_dnd_enabled(self._dnd_mode)
+        if (
+            self._dnd_mode
+            and Director._is_resident_mode_enabled(self)
+            and self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED)
+        ):
+            self._state_machine.transition_to(EntityState.HIDDEN)
         if self._idle_monitor is not None:
             self._idle_monitor.reset_to_standby()
             self._arm_idle_threshold_with_jitter()
+        if not self._dnd_mode:
+            Director._sync_resident_visibility(self)
 
     def is_dnd_mode(self) -> bool:
         return bool(self._dnd_mode)
@@ -661,6 +703,7 @@ class Director(QObject):
         self._deep_sleep_active = False
         self._passive_presence_active = False
         self._suppress_engaged_script_once = False
+        self._suppress_camera_once = False
         timer = getattr(self, "_passive_presence_timer", None)
         if timer is not None and timer.isActive():
             timer.stop()
@@ -683,7 +726,10 @@ class Director(QObject):
         self._enter_engaged()
 
     def _enter_engaged(self) -> None:
-        self._start_camera_tracking_if_needed()
+        skip_camera_once = self._suppress_camera_once
+        self._suppress_camera_once = False
+        if not skip_camera_once:
+            self._start_camera_tracking_if_needed()
         self._set_entity_state("state1")
         silent_presence_entry = self._suppress_engaged_script_once
         self._suppress_engaged_script_once = False
@@ -716,8 +762,9 @@ class Director(QObject):
         if self._behavior_mode != BehaviorMode.SUMMONING:
             self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
         self._apply_behavior_mode_visual()
-        self._set_entity_autonomous(not silent_presence_entry)
-        if not silent_presence_entry:
+        resident_active = Director._is_resident_mode_enabled(self) and not self._dnd_mode
+        self._set_entity_autonomous(False if resident_active else not silent_presence_entry)
+        if not silent_presence_entry and not resident_active:
             self._auto_dismiss_timer.start(self._auto_dismiss_ms)
 
     def _enter_fleeing(self) -> None:
@@ -744,6 +791,8 @@ class Director(QObject):
     def _on_idle_time_updated(self, idle_ms: int) -> None:
         self._latest_idle_time_ms = int(idle_ms)
         self._refresh_presence_state()
+        if Director._is_resident_mode_enabled(self):
+            Director._sync_resident_visibility(self)
 
     @Slot(object)
     def _on_gaze_updated(self, gaze_data: object) -> None:
@@ -826,6 +875,9 @@ class Director(QObject):
 
     @Slot()
     def _on_auto_dismiss_timeout(self) -> None:
+        if Director._is_resident_mode_enabled(self):
+            Director._sync_resident_visibility(self)
+            return
         if self._state_machine.current_state == EntityState.ENGAGED:
             self._mood_system.on_dismissed()
             self._audio_manager.interrupt()
@@ -1066,16 +1118,68 @@ class Director(QObject):
         if was_deep_sleep:
             if not self._set_entity_state("state2", as_base=False):
                 self._set_entity_state("state1", as_base=False)
-            self._set_entity_autonomous(True)
-            self._auto_dismiss_timer.start(self._auto_dismiss_ms)
+            resident_active = Director._is_resident_mode_enabled(self) and not self._dnd_mode
+            self._set_entity_autonomous(not resident_active)
+            if not resident_active:
+                self._auto_dismiss_timer.start(self._auto_dismiss_ms)
 
     @Slot()
     def _on_passive_presence_timeout(self) -> None:
         if not self._passive_presence_active:
             return
+        if Director._is_resident_mode_enabled(self):
+            self._passive_presence_active = False
+            Director._sync_resident_visibility(self)
+            return
         self._passive_presence_active = False
         if self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED):
             self._state_machine.transition_to(EntityState.HIDDEN)
+
+    def _is_resident_mode_enabled(self) -> bool:
+        return bool(getattr(self, "_resident_mode", False))
+
+    def _sync_resident_visibility(self) -> None:
+        if not Director._is_resident_mode_enabled(self):
+            return
+        if bool(getattr(self, "_dnd_mode", False)):
+            return
+        if bool(getattr(self, "_voice_trajectory_playing", False)):
+            return
+
+        state_machine = getattr(self, "_state_machine", None)
+        if state_machine is None:
+            return
+        state = getattr(state_machine, "current_state", None)
+
+        is_fullscreen = False
+        if bool(getattr(self, "_full_screen_pause", False)):
+            try:
+                is_fullscreen = bool(self._is_fullscreen_app_running())
+            except Exception:
+                is_fullscreen = False
+
+        if is_fullscreen:
+            if state in (EntityState.PEEKING, EntityState.ENGAGED):
+                state_machine.transition_to(EntityState.HIDDEN)
+            return
+
+        if state == EntityState.HIDDEN:
+            setattr(self, "_suppress_engaged_script_once", True)
+            summon = getattr(self, "summon_now", None)
+            if not callable(summon):
+                return
+            if not bool(summon()):
+                setattr(self, "_suppress_engaged_script_once", False)
+                return
+            state = getattr(state_machine, "current_state", state)
+
+        if state in (EntityState.PEEKING, EntityState.ENGAGED):
+            stop_timer = getattr(self, "_stop_auto_dismiss_timer", None)
+            if callable(stop_timer):
+                stop_timer()
+            set_autonomous = getattr(self, "_set_entity_autonomous", None)
+            if callable(set_autonomous):
+                set_autonomous(False)
 
     def _track_expression_state(self, gaze_data: GazeData) -> None:
         if self._state_machine.current_state not in (EntityState.PEEKING, EntityState.ENGAGED):
@@ -1136,6 +1240,8 @@ class Director(QObject):
             "[EmotionComfort] Triggered: expression=sad cooldown=%ds",
             self.SAD_COMFORT_COOLDOWN_SECONDS,
         )
+        if self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED):
+            self._set_entity_state("state5", as_base=False)
         try:
             self._audio_manager.speak(
                 self.SAD_COMFORT_TEXT,
@@ -1202,6 +1308,8 @@ class Director(QObject):
             text = random.choice(self.USER_RETURN_MEDIUM_TEXTS).format(minutes=minutes)
         else:
             text = random.choice(self.USER_RETURN_LONG_TEXTS)
+        if self._state_machine.current_state in (EntityState.PEEKING, EntityState.ENGAGED):
+            self._set_entity_state("state6", as_base=False)
         try:
             self._audio_manager.speak(
                 text,
