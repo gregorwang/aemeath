@@ -7,6 +7,17 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 logger = logging.getLogger("CyberCompanion")
 
 
+def _activate_meter_interface_from_speakers(speakers: object, meter_iid: object, clsctx_all: int):
+    activate = getattr(speakers, "Activate", None)
+    if callable(activate):
+        return activate(meter_iid, clsctx_all, None)
+    raw_device = getattr(speakers, "_dev", None)
+    raw_activate = getattr(raw_device, "Activate", None)
+    if callable(raw_activate):
+        return raw_activate(meter_iid, clsctx_all, None)
+    raise AttributeError("Default audio device does not expose Activate/_dev.Activate")
+
+
 class _AudioPeakWorker(QObject):
     """Background COM meter polling worker."""
 
@@ -23,7 +34,11 @@ class _AudioPeakWorker(QObject):
             from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
 
             speakers = AudioUtilities.GetSpeakers()
-            interface = speakers.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
+            interface = _activate_meter_interface_from_speakers(
+                speakers,
+                IAudioMeterInformation._iid_,
+                CLSCTX_ALL,
+            )
             self._meter = interface.QueryInterface(IAudioMeterInformation)
             return True
         except Exception:
@@ -199,7 +214,11 @@ class AudioDetector(QObject):
             from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
 
             speakers = AudioUtilities.GetSpeakers()
-            interface = speakers.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
+            interface = _activate_meter_interface_from_speakers(
+                speakers,
+                IAudioMeterInformation._iid_,
+                CLSCTX_ALL,
+            )
             self._meter = interface.QueryInterface(IAudioMeterInformation)
             return True
         except ImportError:

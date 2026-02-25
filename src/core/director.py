@@ -207,6 +207,7 @@ class Director(QObject):
         self._periodic_scan_enabled = bool(getattr(getattr(app_config, "vision", None), "periodic_scan_enabled", True))
         self._periodic_scan_interval_ms = self._resolve_periodic_scan_interval_ms(app_config)
         self._periodic_scan_active = False
+        self._periodic_scan_debug_mode = False
         self._periodic_scan_started_camera = False
         self._periodic_scan_samples: list[GazeData] = []
         self._screen_commentary_state_lock = threading.Lock()
@@ -756,6 +757,7 @@ class Director(QObject):
             self._idle_invasion_controller.shutdown()
         self._set_entity_autonomous(False)
         self._periodic_scan_active = False
+        self._periodic_scan_debug_mode = False
         self._periodic_scan_started_camera = False
         periodic_samples = getattr(self, "_periodic_scan_samples", None)
         if periodic_samples is not None:
@@ -868,6 +870,8 @@ class Director(QObject):
         sample_collector = getattr(self, "_collect_periodic_scan_sample", None)
         if callable(sample_collector):
             sample_collector(gaze_data)
+        if self._periodic_scan_active and self._periodic_scan_debug_mode:
+            return
         self._refresh_presence_state()
         self._maybe_trigger_no_face_test(gaze_data)
         self._track_expression_state(gaze_data)
@@ -880,6 +884,7 @@ class Director(QObject):
         if self._periodic_scan_collect_timer.isActive():
             self._periodic_scan_collect_timer.stop()
         self._periodic_scan_active = False
+        self._periodic_scan_debug_mode = False
         self._periodic_scan_started_camera = False
         self._periodic_scan_samples.clear()
         self._reset_no_face_tracker()
@@ -901,7 +906,7 @@ class Director(QObject):
             self.LOGGER.debug("[AudioOutputMonitor] 忽略本进程语音播放触发的音频输出")
             return
         self._audio_output_active = True
-        if self._gif_state_mapper:
+        if self._gif_state_mapper and self._state_machine.current_state != EntityState.HIDDEN:
             self._gif_state_mapper.on_audio_started()
         self._set_behavior_mode(BehaviorMode.MEDIA_PLAYING)
 
@@ -1064,6 +1069,7 @@ class Director(QObject):
             return False
 
         self._periodic_scan_active = True
+        self._periodic_scan_debug_mode = bool(debug_mode)
         self._periodic_scan_samples.clear()
         self._periodic_scan_started_camera = False
         if not self._gaze_tracker.isRunning():
@@ -1088,6 +1094,8 @@ class Director(QObject):
 
         samples = list(self._periodic_scan_samples)
         self._periodic_scan_active = False
+        debug_mode = self._periodic_scan_debug_mode
+        self._periodic_scan_debug_mode = False
         self._periodic_scan_samples.clear()
         started_camera = self._periodic_scan_started_camera
         self._periodic_scan_started_camera = False
@@ -1096,15 +1104,24 @@ class Director(QObject):
             self._stop_camera_tracking()
 
         if not samples:
-            self.LOGGER.info("[PeriodicCamera] Scan finished: no samples")
+            if debug_mode:
+                self.LOGGER.info("[PeriodicCamera] Debug scan finished: no samples")
+            else:
+                self.LOGGER.info("[PeriodicCamera] Scan finished: no samples")
             self._sync_periodic_scan_timer()
             return
 
         faces = [item for item in samples if bool(item.face_detected)]
         face_ratio = float(len(faces)) / float(len(samples))
         if not faces or face_ratio < self.PERIODIC_CAMERA_MIN_FACE_RATIO:
-            self.LOGGER.info("[PeriodicCamera] Scan result: absent face_ratio=%.2f", face_ratio)
-            self._apply_periodic_scan_visual(face_present=False, emotion_label="unknown")
+            if debug_mode:
+                self.LOGGER.info(
+                    "[PeriodicCamera] Debug scan result: absent face_ratio=%.2f (visual actions suppressed)",
+                    face_ratio,
+                )
+            else:
+                self.LOGGER.info("[PeriodicCamera] Scan result: absent face_ratio=%.2f", face_ratio)
+                self._apply_periodic_scan_visual(face_present=False, emotion_label="unknown")
             self._sync_periodic_scan_timer()
             return
 
@@ -1115,8 +1132,15 @@ class Director(QObject):
                 label = "neutral"
             emotion_votes[label] = emotion_votes.get(label, 0.0) + max(0.1, float(gaze.emotion_score))
         dominant = max(emotion_votes.items(), key=lambda item: item[1])[0] if emotion_votes else "neutral"
-        self.LOGGER.info("[PeriodicCamera] Scan result: present face_ratio=%.2f emotion=%s", face_ratio, dominant)
-        self._apply_periodic_scan_visual(face_present=True, emotion_label=dominant)
+        if debug_mode:
+            self.LOGGER.info(
+                "[PeriodicCamera] Debug scan result: present face_ratio=%.2f emotion=%s (visual actions suppressed)",
+                face_ratio,
+                dominant,
+            )
+        else:
+            self.LOGGER.info("[PeriodicCamera] Scan result: present face_ratio=%.2f emotion=%s", face_ratio, dominant)
+            self._apply_periodic_scan_visual(face_present=True, emotion_label=dominant)
         self._sync_periodic_scan_timer()
 
     def _apply_periodic_scan_visual(self, *, face_present: bool, emotion_label: str) -> None:

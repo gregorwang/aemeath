@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from core.audio_detector import AudioDetector
+from core.audio_detector import AudioDetector, _activate_meter_interface_from_speakers
 
 
 class _TestableAudioDetector(AudioDetector):
@@ -89,6 +89,38 @@ class AudioDetectorTests(unittest.TestCase):
 
         self.assertEqual(len(stopped), 1)
         self.assertFalse(detector.is_playing)
+
+    def test_activate_meter_uses_legacy_activate(self) -> None:
+        calls: list[tuple[object, int, object | None]] = []
+
+        class _LegacySpeakers:
+            def Activate(self, iid: object, clsctx: int, reserved: object | None):
+                calls.append((iid, clsctx, reserved))
+                return "legacy-interface"
+
+        result = _activate_meter_interface_from_speakers(_LegacySpeakers(), "iid-x", 99)
+        self.assertEqual(result, "legacy-interface")
+        self.assertEqual(calls, [("iid-x", 99, None)])
+
+    def test_activate_meter_uses_wrapped_dev_activate(self) -> None:
+        calls: list[tuple[object, int, object | None]] = []
+
+        class _WrappedDev:
+            def Activate(self, iid: object, clsctx: int, reserved: object | None):
+                calls.append((iid, clsctx, reserved))
+                return "wrapped-interface"
+
+        class _WrappedSpeakers:
+            def __init__(self) -> None:
+                self._dev = _WrappedDev()
+
+        result = _activate_meter_interface_from_speakers(_WrappedSpeakers(), "iid-y", 7)
+        self.assertEqual(result, "wrapped-interface")
+        self.assertEqual(calls, [("iid-y", 7, None)])
+
+    def test_activate_meter_raises_when_activate_unavailable(self) -> None:
+        with self.assertRaises(AttributeError):
+            _activate_meter_interface_from_speakers(object(), "iid-z", 1)
 
 
 if __name__ == "__main__":

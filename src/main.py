@@ -38,6 +38,7 @@ try:
     from core.paths import get_base_dir, get_cache_dir, get_log_dir, get_log_file, resolve_config_path
     from core.presence_detector import PresenceDetector
     from core.resource_scheduler import ResourceScheduler
+    from core.single_instance import SingleInstanceGuard
     from core.voice_runtime import VoiceRuntimeController
     from ui.entity_window import EntityWindow
     from ui.gif_particle import GifParticleManager
@@ -63,6 +64,7 @@ except ModuleNotFoundError:
     from .core.paths import get_base_dir, get_cache_dir, get_log_dir, get_log_file, resolve_config_path
     from .core.presence_detector import PresenceDetector
     from .core.resource_scheduler import ResourceScheduler
+    from .core.single_instance import SingleInstanceGuard
     from .core.voice_runtime import VoiceRuntimeController
     from .ui.entity_window import EntityWindow
     from .ui.gif_particle import GifParticleManager
@@ -192,6 +194,10 @@ def _apply_dev_fast_idle_profile(config) -> bool:
 
 def main() -> int:
     app = QApplication(sys.argv)
+    single_instance_guard = SingleInstanceGuard("Local\\CyberCompanion_Aemeath_Singleton")
+    if not single_instance_guard.acquire():
+        QMessageBox.information(None, "CyberCompanion", "CyberCompanion 已在运行，请先关闭已有实例。")
+        return 0
     splash = None
     try:
         import pyi_splash  # type: ignore
@@ -821,6 +827,7 @@ def main() -> int:
         audio_manager.stop()
         if tray_manager is not None:
             tray_manager.hide()
+        single_instance_guard.release()
 
     app.aboutToQuit.connect(_shutdown)
     return app.exec()

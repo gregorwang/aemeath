@@ -53,10 +53,13 @@ class _GazeUpdateSubject:
         self._ascii_renderer = None
         self._state_machine = _StateMachineStub(EntityState.ENGAGED)
         self._current_ascii_template = ""
+        self._periodic_scan_active = False
+        self._periodic_scan_debug_mode = False
         self.refresh_calls = 0
         self.no_face_calls = 0
         self.expression_calls = 0
         self.sad_comfort_calls = 0
+        self.scan_sample_calls = 0
 
     def _refresh_presence_state(self) -> None:
         self.refresh_calls += 1
@@ -69,6 +72,9 @@ class _GazeUpdateSubject:
 
     def _maybe_trigger_sad_comfort(self, _gaze_data: GazeData) -> None:
         self.sad_comfort_calls += 1
+
+    def _collect_periodic_scan_sample(self, _gaze_data: GazeData) -> None:
+        self.scan_sample_calls += 1
 
 
 class _GazeFollowWindowStub:
@@ -178,6 +184,57 @@ class _PeriodicScanVisualSubject:
         return True
 
 
+class _PeriodicScanFinishSubject:
+    PERIODIC_CAMERA_MIN_FACE_RATIO = Director.PERIODIC_CAMERA_MIN_FACE_RATIO
+    EXPRESSION_STATE_MAP = Director.EXPRESSION_STATE_MAP
+
+    def __init__(self, *, debug_mode: bool, samples: list[GazeData]) -> None:
+        self._periodic_scan_active = True
+        self._periodic_scan_debug_mode = bool(debug_mode)
+        self._periodic_scan_samples = list(samples)
+        self._periodic_scan_started_camera = False
+        self._state_machine = _StateMachineStub(EntityState.HIDDEN)
+        self.LOGGER = SimpleNamespace(info=lambda *_args, **_kwargs: None)
+        self.sync_calls = 0
+        self.stop_camera_calls = 0
+        self.visual_calls: list[tuple[bool, str]] = []
+
+    def _sync_periodic_scan_timer(self) -> None:
+        self.sync_calls += 1
+
+    def _stop_camera_tracking(self) -> None:
+        self.stop_camera_calls += 1
+
+    def _apply_periodic_scan_visual(self, *, face_present: bool, emotion_label: str) -> None:
+        self.visual_calls.append((bool(face_present), str(emotion_label)))
+
+
+class _AudioMapperStub:
+    def __init__(self) -> None:
+        self.started_calls = 0
+        self.stopped_calls = 0
+
+    def on_audio_started(self) -> None:
+        self.started_calls += 1
+
+    def on_audio_stopped(self) -> None:
+        self.stopped_calls += 1
+
+
+class _AudioReactiveSubject:
+    def __init__(self, *, state: EntityState) -> None:
+        self._audio_output_reactive = True
+        self._self_playback_active = False
+        self._audio_output_active = False
+        self._gif_state_mapper = _AudioMapperStub()
+        self._state_machine = _StateMachineStub(state)
+        self.behavior_modes: list[BehaviorMode] = []
+        self.LOGGER = SimpleNamespace(debug=lambda *_args, **_kwargs: None)
+
+    def _set_behavior_mode(self, mode: BehaviorMode, *, apply_visual: bool = True) -> None:
+        self.behavior_modes.append(mode)
+
+
 class DirectorCvChainTest(unittest.TestCase):
     def test_idle_update_refreshes_presence(self) -> None:
         subject = _PresenceRefreshSubject()
@@ -198,6 +255,22 @@ class DirectorCvChainTest(unittest.TestCase):
         self.assertEqual(subject.no_face_calls, 1)
         self.assertEqual(subject.expression_calls, 1)
         self.assertEqual(subject.sad_comfort_calls, 1)
+        self.assertEqual(subject.scan_sample_calls, 1)
+
+    def test_gaze_update_debug_periodic_scan_skips_reactive_hooks(self) -> None:
+        subject = _GazeUpdateSubject()
+        subject._periodic_scan_active = True
+        subject._periodic_scan_debug_mode = True
+        gaze_data = GazeData(face_detected=True, emotion_label="sad", emotion_score=0.95)
+
+        Director._on_gaze_updated(subject, gaze_data)
+
+        self.assertIs(subject._latest_gaze_data, gaze_data)
+        self.assertEqual(subject.scan_sample_calls, 1)
+        self.assertEqual(subject.refresh_calls, 0)
+        self.assertEqual(subject.no_face_calls, 0)
+        self.assertEqual(subject.expression_calls, 0)
+        self.assertEqual(subject.sad_comfort_calls, 0)
 
     def test_gaze_update_applies_window_follow_when_enabled(self) -> None:
         subject = _GazeFollowSubject()
@@ -274,6 +347,48 @@ class DirectorCvChainTest(unittest.TestCase):
         self.assertEqual(subject.summon_calls, 1)
         self.assertTrue(subject._suppress_camera_once)
         self.assertEqual(subject.entity_state_calls, [("state1", False)])
+
+    def test_finish_periodic_scan_debug_mode_suppresses_visual_actions(self) -> None:
+        subject = _PeriodicScanFinishSubject(
+            debug_mode=True,
+            samples=[GazeData(face_detected=True, emotion_label="sad", emotion_score=0.8)],
+        )
+
+        Director._finish_periodic_camera_scan(subject)
+
+        self.assertFalse(subject._periodic_scan_active)
+        self.assertFalse(subject._periodic_scan_debug_mode)
+        self.assertEqual(subject.sync_calls, 1)
+        self.assertEqual(subject.visual_calls, [])
+
+    def test_finish_periodic_scan_normal_mode_applies_visual_actions(self) -> None:
+        subject = _PeriodicScanFinishSubject(
+            debug_mode=False,
+            samples=[GazeData(face_detected=True, emotion_label="neutral", emotion_score=0.8)],
+        )
+
+        Director._finish_periodic_camera_scan(subject)
+
+        self.assertEqual(subject.sync_calls, 1)
+        self.assertEqual(subject.visual_calls, [(True, "neutral")])
+
+    def test_audio_output_started_skips_particle_start_when_hidden(self) -> None:
+        subject = _AudioReactiveSubject(state=EntityState.HIDDEN)
+
+        Director._on_audio_output_started(subject)
+
+        self.assertTrue(subject._audio_output_active)
+        self.assertEqual(subject._gif_state_mapper.started_calls, 0)
+        self.assertEqual(subject.behavior_modes, [BehaviorMode.MEDIA_PLAYING])
+
+    def test_audio_output_started_triggers_particle_start_when_visible(self) -> None:
+        subject = _AudioReactiveSubject(state=EntityState.ENGAGED)
+
+        Director._on_audio_output_started(subject)
+
+        self.assertTrue(subject._audio_output_active)
+        self.assertEqual(subject._gif_state_mapper.started_calls, 1)
+        self.assertEqual(subject.behavior_modes, [BehaviorMode.MEDIA_PLAYING])
 
 
 if __name__ == "__main__":
