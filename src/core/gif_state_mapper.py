@@ -119,10 +119,10 @@ class GifStateMapper(QObject):
         if excited_path:
             self._particle_manager.spawn_wave(
                 [excited_path],
-                count=1,
-                scale=0.35,
-                duration_ms=3000,
-                stagger_ms=300,
+                count=2,
+                scale=0.45,
+                duration_ms=3500,
+                stagger_ms=400,
             )
 
     @Slot()
@@ -134,10 +134,10 @@ class GifStateMapper(QObject):
         if shy_path:
             self._particle_manager.spawn_wave(
                 [shy_path],
-                count=1,
-                scale=0.3,
-                duration_ms=1500,
-                stagger_ms=150,
+                count=2,
+                scale=0.25,
+                duration_ms=1200,
+                stagger_ms=100,
                 edges="random",
             )
 
@@ -155,10 +155,10 @@ class GifStateMapper(QObject):
         if greeting_path:
             self._particle_manager.spawn_wave(
                 [greeting_path],
-                count=1,
-                scale=0.4,
-                duration_ms=3500,
-                stagger_ms=400,
+                count=2,
+                scale=0.5,
+                duration_ms=4000,
+                stagger_ms=500,
                 edges="random",
             )
 
@@ -258,8 +258,8 @@ class GifStateMapper(QObject):
             self._particle_manager.spawn_wave(
                 [thinking_path],
                 count=1,
-                scale=0.35,
-                duration_ms=4000,
+                scale=0.5,
+                duration_ms=5000,
                 stagger_ms=400,
                 edges="random",
             )
@@ -273,10 +273,10 @@ class GifStateMapper(QObject):
         if greeting_path:
             self._particle_manager.spawn_wave(
                 [greeting_path],
-                count=1,
-                scale=0.35,
-                duration_ms=3000,
-                stagger_ms=300,
+                count=2,
+                scale=0.45,
+                duration_ms=3500,
+                stagger_ms=350,
                 edges="random",
             )
 

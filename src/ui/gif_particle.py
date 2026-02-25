@@ -645,7 +645,7 @@ class GifParticleManager(QWidget):
     Supports spawning waves of particles and limiting max concurrent count.
     """
 
-    MAX_CONCURRENT = 3
+    MAX_CONCURRENT = 5
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)

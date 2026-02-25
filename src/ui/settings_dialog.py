@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QMovie
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -18,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -35,23 +39,31 @@ except ModuleNotFoundError:
 class SettingsDialog(QDialog):
     """Runtime settings editor."""
     MODEL_PRESETS = [
-        "kimi-latest",
-        "kimi-thinking-preview",
-        "kimi-k2-0711-preview",
+        "kimi-k2.5",
+        "kimi-k2-thinking",
+        "moonshot-v1-auto",
+        "moonshot-v1-32k",
         "glm-5",
+        "glm-4.7",
+        "glm-4.6",
         "glm-4.5",
         "glm-4.5-air",
         "glm-4.5-flash",
-        "doubao-seed-1-6-250615",
+        "ep-XXXXXXX",
+        "doubao-1-5-pro-256k-250115",
+        "doubao-1-5-pro-32k-250115",
         "doubao-seed-1-6-thinking-250715",
-        "ep-xxxxxxxxxxxxxxxxx",
-        "grok-4-latest",
+        "doubao-1-5-ui-tars-250428",
+        "grok-4.1",
+        "grok-4.1-fast-reasoning",
+        "grok-4.1-fast-non-reasoning",
         "grok-4",
         "grok-4-fast-reasoning",
+        "grok-3-mini",
         "grok-code-fast-1",
-        "grok-3-mini-fast",
-        "grok-2-mini-transcribe",
+        "grok-2-image-1212",
         "deepseek-chat",
+        "deepseek-reasoner",
         "gpt-5.1",
         "gpt-5.1-mini",
         "gpt-5",
@@ -60,33 +72,35 @@ class SettingsDialog(QDialog):
         "gpt-4o",
     ]
     MODEL_PRESETS_BY_PROVIDER = {
-        "openai": ["gpt-5-mini", "gpt-5", "gpt-4.1", "gpt-4o"],
-        "xai": ["grok-4-latest", "grok-4", "grok-3-mini-fast", "grok-code-fast-1"],
-        "deepseek": ["deepseek-chat"],
-        "kimi": ["kimi-latest", "kimi-thinking-preview", "kimi-k2-0711-preview"],
-        "zhipu": ["glm-5", "glm-4.5", "glm-4.5-air", "glm-4.5-flash"],
+        "openai": ["gpt-5-mini", "gpt-5", "gpt-4.1", "gpt-4o", "gpt-5.1", "gpt-5.1-mini"],
+        "xai": ["grok-4.1", "grok-4.1-fast-reasoning", "grok-4.1-fast-non-reasoning", "grok-4", "grok-4-fast-reasoning", "grok-3-mini", "grok-code-fast-1", "grok-2-image-1212"],
+        "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+        "kimi": ["kimi-k2.5", "kimi-k2-thinking", "moonshot-v1-auto", "moonshot-v1-32k"],
+        "zhipu": ["glm-5", "glm-4.7", "glm-4.6", "glm-4.5", "glm-4.5-air", "glm-4.5-flash"],
         "doubao": [
-            "doubao-seed-1-6-250615",
+            "ep-XXXXXXX",
+            "doubao-1-5-pro-256k-250115",
+            "doubao-1-5-pro-32k-250115",
             "doubao-seed-1-6-thinking-250715",
-            "ep-xxxxxxxxxxxxxxxxx",
+            "doubao-1-5-ui-tars-250428",
         ],
     }
     PROVIDER_DEFAULTS = {
         "none": ("", ""),
         "openai": ("https://api.openai.com/v1", "gpt-5-mini"),
-        "xai": ("https://api.x.ai", "grok-4-latest"),
+        "xai": ("https://api.x.ai", "grok-4.1"),
         "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat"),
-        "kimi": ("https://api.moonshot.cn/v1", "kimi-latest"),
+        "kimi": ("https://api.moonshot.cn/v1", "kimi-k2.5"),
         "zhipu": ("https://open.bigmodel.cn/api/paas/v4", "glm-5"),
-        "doubao": ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-250615"),
+        "doubao": ("https://ark.cn-beijing.volces.com/api/v3", "ep-XXXXXXX"),
     }
     ENDPOINT_PRESETS = {
         "OpenAI 官方": ("openai", "https://api.openai.com/v1", "gpt-5-mini"),
-        "xAI 官方(推荐看图)": ("xai", "https://api.x.ai", "grok-4-latest"),
+        "xAI 官方(推荐看图)": ("xai", "https://api.x.ai", "grok-4.1"),
         "DeepSeek 官方(当前文本为主)": ("deepseek", "https://api.deepseek.com/v1", "deepseek-chat"),
-        "Kimi 官方": ("kimi", "https://api.moonshot.cn/v1", "kimi-latest"),
+        "Kimi 官方": ("kimi", "https://api.moonshot.cn/v1", "kimi-k2.5"),
         "智谱官方": ("zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-5"),
-        "豆包方舟": ("doubao", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-250615"),
+        "豆包方舟": ("doubao", "https://ark.cn-beijing.volces.com/api/v3", "ep-XXXXXXX"),
     }
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None):
@@ -106,6 +120,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._create_general_tab(), "基础")
         tabs.addTab(self._create_ai_tab(), "AI")
         tabs.addTab(self._create_voice_tab(), "语音与视觉")
+        tabs.addTab(self._create_animation_preview_tab(), "动画预览")
         root.addWidget(tabs)
 
         footer = QHBoxLayout()
@@ -361,6 +376,209 @@ class SettingsDialog(QDialog):
             self.asr_prompt_edit,
         ]
         return voice_tab
+
+    def _create_animation_preview_tab(self) -> QWidget:
+        """Create and return the Animation Preview tab."""
+        tab = QWidget(self)
+        outer_layout = QVBoxLayout(tab)
+
+        scroll = QScrollArea(tab)
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget(scroll)
+        layout = QVBoxLayout(scroll_content)
+
+        preview_box = QGroupBox("GIF 状态预览", scroll_content)
+        preview_layout = QVBoxLayout(preview_box)
+
+        gif_info: list[tuple[str, str, str, list[str]]] = [
+            (
+                "state1.gif",
+                "默认/好奇",
+                "STATE_IDLE",
+                [
+                    "角色出场后的默认状态",
+                    "BehaviorMode.IDLE 时显示",
+                    "表情追踪识别为 neutral 时显示",
+                    "台词播放时的默认视觉",
+                ],
+            ),
+            (
+                "state2.gif",
+                "兴奋/活跃",
+                "STATE_EXCITED",
+                [
+                    "左键单击角色时随机切换到此状态（3秒后恢复）",
+                    "用户从深度睡眠唤醒后显示",
+                    "粒子：角色进入互动状态时生成 1 个此 GIF 粒子",
+                ],
+            ),
+            (
+                "state3.gif",
+                "律动/音乐",
+                "STATE_ROAMING",
+                [
+                    "BehaviorMode.MEDIA_PLAYING 时显示（检测到系统音频）",
+                    "角色自主漫步移动时显示",
+                    "粒子：检测到系统音频开始时生成律动粒子",
+                    "粒子：音频播放中每 4 秒可能追加 1 个粒子",
+                ],
+            ),
+            (
+                "state4.gif",
+                "害羞/逃跑",
+                "STATE_FLEE",
+                [
+                    "角色逃跑（FLEEING）时显示",
+                    "BehaviorMode.BUSY 时显示",
+                    "表情追踪识别为 angry 时显示",
+                    "粒子：角色逃跑时生成 1 个此 GIF 粒子",
+                ],
+            ),
+            (
+                "state5.gif",
+                "思考/观察",
+                "STATE_HOVER",
+                [
+                    "鼠标悬停在角色上时显示",
+                    "屏幕评论（'你在看什么？'）进行时显示",
+                    "进入被动陪伴（用户在但不活跃）时显示",
+                    "深度睡眠（用户不在）时显示",
+                    "表情追踪识别为 sad 时显示",
+                    "悲伤安慰触发时显示",
+                    "粒子：悲伤安慰时生成 1 个、长时间空闲时生成 1 个",
+                ],
+            ),
+            (
+                "state6.gif",
+                "开心/问候",
+                "STATE_GREETING",
+                [
+                    "左键单击角色时随机切换到此状态（3秒后恢复）",
+                    "BehaviorMode.SUMMONING 时显示（轨迹登场中）",
+                    "用户离开后回来时显示",
+                    "表情追踪识别为 happy 时显示",
+                    "粒子：语音唤醒/召唤完成时 1 个、用户回来时 1 个",
+                ],
+            ),
+            (
+                "state7.gif",
+                "环境/装饰",
+                "STATE_AMBIENT",
+                [
+                    "角色自主探头侦查时随机使用",
+                    "粒子：音频脉动中随机替代律动粒子",
+                    "粒子：长时间空闲时随机生成",
+                    "粒子：spawn_random_ambient() 调用时生成",
+                ],
+            ),
+        ]
+
+        characters_dir = self._find_characters_dir()
+        self._preview_movies: list[QMovie] = []
+
+        for gif_file, label_text, const_name, triggers in gif_info:
+            row_widget = QWidget(preview_box)
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(4, 4, 4, 4)
+
+            preview_label = QLabel(row_widget)
+            preview_label.setFixedSize(64, 64)
+            preview_label.setStyleSheet(
+                "QLabel { background: #2a2a2a; border: 1px solid #555; border-radius: 4px; }"
+            )
+            preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if characters_dir is not None:
+                gif_path = characters_dir / gif_file
+                if gif_path.exists():
+                    movie = QMovie(str(gif_path))
+                    if movie.isValid():
+                        movie.setParent(preview_label)
+                        movie.setCacheMode(QMovie.CacheMode.CacheAll)
+                        movie.setScaledSize(QSize(56, 56))
+                        preview_label.setMovie(movie)
+                        movie.start()
+                        self._preview_movies.append(movie)
+            row_layout.addWidget(preview_label)
+
+            info_layout = QVBoxLayout()
+            title_label = QLabel(f"<b>{gif_file}</b> — {label_text} ({const_name})", row_widget)
+            info_layout.addWidget(title_label)
+            for trigger in triggers:
+                trigger_label = QLabel(f"  • {trigger}", row_widget)
+                trigger_label.setStyleSheet("QLabel { color: #888; font-size: 11px; }")
+                trigger_label.setWordWrap(True)
+                info_layout.addWidget(trigger_label)
+            row_layout.addLayout(info_layout, stretch=1)
+            preview_layout.addWidget(row_widget)
+
+        layout.addWidget(preview_box)
+
+        mode_box = QGroupBox("行为模式 → GIF 映射", scroll_content)
+        mode_layout = QVBoxLayout(mode_box)
+        mode_info = QLabel(
+            "<pre>"
+            "BehaviorMode.IDLE          → state1.gif (默认/好奇)\n"
+            "BehaviorMode.BUSY          → state4.gif (害羞/逃跑)\n"
+            "BehaviorMode.MEDIA_PLAYING → state3.gif (律动/音乐)\n"
+            "BehaviorMode.SUMMONING     → state6.gif (开心/问候)"
+            "</pre>",
+            mode_box,
+        )
+        mode_info.setTextFormat(Qt.TextFormat.RichText)
+        mode_layout.addWidget(mode_info)
+        layout.addWidget(mode_box)
+
+        expr_box = QGroupBox("摄像头表情识别 → GIF 映射", scroll_content)
+        expr_layout = QVBoxLayout(expr_box)
+        expr_info = QLabel(
+            "<pre>"
+            "neutral (中性) → state1.gif\n"
+            "angry   (生气) → state4.gif\n"
+            "sad     (悲伤) → state5.gif\n"
+            "happy   (开心) → state6.gif"
+            "</pre>",
+            expr_box,
+        )
+        expr_info.setTextFormat(Qt.TextFormat.RichText)
+        expr_layout.addWidget(expr_info)
+        expr_note = QLabel(
+            "提示: 表情识别需要启用摄像头功能，且角色处于可见状态时才会生效。",
+            expr_box,
+        )
+        expr_note.setStyleSheet("QLabel { color: #888; }")
+        expr_note.setWordWrap(True)
+        expr_layout.addWidget(expr_note)
+        layout.addWidget(expr_box)
+
+        mouse_box = QGroupBox("鼠标交互 → GIF 映射", scroll_content)
+        mouse_layout = QVBoxLayout(mouse_box)
+        mouse_info = QLabel(
+            "• <b>鼠标悬停</b>: 切换到 state5.gif (思考/观察)\n"
+            "• <b>左键单击</b>: 随机切换到 state2.gif 或 state6.gif, 3 秒后恢复\n"
+            "• <b>自主漫步</b>: 移动时切换到 state3.gif, 到达后恢复\n"
+            "• <b>自主探头</b>: 随机使用 state1.gif 或 state7.gif",
+            mouse_box,
+        )
+        mouse_info.setWordWrap(True)
+        mouse_layout.addWidget(mouse_info)
+        layout.addWidget(mouse_box)
+
+        layout.addStretch(1)
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll)
+        return tab
+
+    @staticmethod
+    def _find_characters_dir() -> Path | None:
+        """Locate the characters directory for GIF preview."""
+        candidates = [
+            Path.cwd() / "characters",
+            Path(__file__).resolve().parent.parent.parent / "characters",
+        ]
+        for candidate in candidates:
+            if candidate.is_dir() and (candidate / "state1.gif").exists():
+                return candidate
+        return None
 
     def _create_button_box(self) -> QDialogButtonBox:
         """Create the OK/Cancel button box."""
