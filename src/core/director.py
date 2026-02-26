@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import random
-import sys
 import threading
 import time
 from datetime import datetime
@@ -46,9 +45,9 @@ try:
 except ModuleNotFoundError:
     from ..ui.gif_particle import TrajectoryPlayer
 try:
-    from .paths import get_base_dir, get_user_data_dir
+    from .paths import get_base_dir
 except ModuleNotFoundError:
-    from core.paths import get_base_dir, get_user_data_dir
+    from core.paths import get_base_dir
 
 try:
     from .config_manager import AppConfig
@@ -1799,109 +1798,27 @@ class Director(QObject):
 
     def _resolve_voice_trajectory_path(self) -> Path | None:
         filename = self.VOICE_TRAJECTORY_FILE
-        env_candidates: list[Path] = []
-        fallback_candidates: list[Path] = []
-        recorded_dirs: list[Path] = []
-        seen_paths: set[str] = set()
-        seen_dirs: set[str] = set()
-
-        def _key(path: Path) -> str:
-            try:
-                return str(path.resolve())
-            except Exception:
-                return str(path)
-
-        def _append_candidate(path: Path, *, env: bool = False) -> None:
-            key = _key(path)
-            if key in seen_paths:
-                return
-            seen_paths.add(key)
-            if env:
-                env_candidates.append(path)
-            else:
-                fallback_candidates.append(path)
-
-        def _append_recorded_dir(path: Path) -> None:
-            key = _key(path)
-            if key in seen_dirs:
-                return
-            seen_dirs.add(key)
-            recorded_dirs.append(path)
-
         env_path = os.environ.get("CYBERCOMPANION_TRAJECTORY_PATH", "").strip()
         if env_path:
             env_candidate = Path(env_path)
             if env_candidate.suffix.lower() == ".json":
-                _append_candidate(env_candidate, env=True)
+                if env_candidate.exists() and env_candidate.is_file():
+                    self.LOGGER.info("[SummonTrajectory] 使用环境变量指定轨迹文件: %s", env_candidate)
+                    return env_candidate
             else:
-                _append_candidate(env_candidate / filename, env=True)
-                _append_recorded_dir(env_candidate)
+                env_candidate = env_candidate / filename
+                if env_candidate.exists() and env_candidate.is_file():
+                    self.LOGGER.info("[SummonTrajectory] 使用环境变量指定轨迹文件: %s", env_candidate)
+                    return env_candidate
 
-        _append_recorded_dir(self._base_dir / "recorded_paths")
-        _append_candidate(self._base_dir / "recorded_paths" / filename)
-        _append_recorded_dir(Path.cwd() / "recorded_paths")
-        _append_candidate(Path.cwd() / "recorded_paths" / filename)
-        _append_candidate(Path.cwd() / filename)
-
-        for parent in [self._base_dir, *self._base_dir.parents[:5]]:
-            _append_recorded_dir(parent / "recorded_paths")
-            _append_candidate(parent / "recorded_paths" / filename)
-            _append_candidate(parent / filename)
-
-        try:
-            exe_parent = Path(sys.executable).resolve().parent
-            for parent in [exe_parent, *exe_parent.parents[:5]]:
-                _append_recorded_dir(parent / "recorded_paths")
-                _append_candidate(parent / "recorded_paths" / filename)
-                _append_candidate(parent / filename)
-        except Exception:
-            pass
-
-        try:
-            user_recorded_dir = get_user_data_dir() / "recorded_paths"
-            _append_recorded_dir(user_recorded_dir)
-            _append_candidate(user_recorded_dir / filename)
-        except Exception:
-            pass
-
-        for candidate in env_candidates:
-            if candidate.exists() and candidate.is_file():
-                self.LOGGER.info("[SummonTrajectory] 使用环境变量指定轨迹文件: %s", candidate)
-                return candidate
-
-        latest_path: Path | None = None
-        latest_mtime = -1.0
-        latest_key = ""
-        for directory in recorded_dirs:
-            if not directory.exists() or not directory.is_dir():
-                continue
-            try:
-                files = directory.glob("trajectory_*.json")
-            except Exception:
-                continue
-            for path in files:
-                if not path.is_file():
-                    continue
-                try:
-                    mtime = float(path.stat().st_mtime)
-                except Exception:
-                    mtime = -1.0
-                key = _key(path)
-                if mtime > latest_mtime or (mtime == latest_mtime and key > latest_key):
-                    latest_mtime = mtime
-                    latest_key = key
-                    latest_path = path
-        if latest_path is not None:
-            self.LOGGER.info("[SummonTrajectory] 自动选择最新轨迹文件: %s", latest_path)
-            return latest_path
-
-        for candidate in fallback_candidates:
-            if candidate.exists() and candidate.is_file():
-                self.LOGGER.info("[SummonTrajectory] 使用剧本轨迹文件: %s", candidate)
-                return candidate
+        candidate = self._base_dir / "recorded_paths" / filename
+        if candidate.exists() and candidate.is_file():
+            self.LOGGER.info("[SummonTrajectory] 使用剧本轨迹文件: %s", candidate)
+            return candidate
         self.LOGGER.debug(
-            "[SummonTrajectory] 剧本轨迹候选路径均不存在: %s",
-            " | ".join(str(item) for item in (env_candidates + fallback_candidates)[:12]),
+            "[SummonTrajectory] 剧本轨迹文件不存在: env=%s, default=%s",
+            env_path,
+            candidate,
         )
         return None
 

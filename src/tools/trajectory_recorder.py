@@ -4,7 +4,6 @@ import json
 import time
 import argparse
 from pathlib import Path
-from typing import Any
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
 from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QPainter, QPen, QColor, QPainterPath, QFont
@@ -224,48 +223,6 @@ class TrajectoryRecorder(QWidget):
             return "bottom"
         return "unknown"
 
-    def _update_manifest(
-        self,
-        *,
-        manifest_path: Path,
-        filename: str,
-        duration_seconds: float,
-        entry_direction: str,
-        states_used: list[int],
-    ) -> None:
-        manifest: dict[str, Any] = {"trajectories": [], "state_mapping": {}}
-        if manifest_path.exists():
-            try:
-                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    manifest = loaded
-            except Exception:
-                manifest = {"trajectories": [], "state_mapping": {}}
-
-        trajectories = manifest.get("trajectories")
-        if not isinstance(trajectories, list):
-            trajectories = []
-        trajectories = [item for item in trajectories if not (isinstance(item, dict) and item.get("filename") == filename)]
-        trajectories.append(
-            {
-                "filename": filename,
-                "source": filename,
-                "description": "",
-                "entry_direction": entry_direction,
-                "duration_seconds": round(float(duration_seconds), 3),
-                "states_used": list(states_used),
-                "trigger_condition": "manual_recording",
-                "notes": "Recorded via trajectory_recorder.py",
-            }
-        )
-        manifest["trajectories"] = trajectories
-
-        state_mapping: dict[str, dict[str, str]] = {}
-        for state_id, (gif_name, label) in sorted(self.gif_key_mapping.items()):
-            state_mapping[str(state_id)] = {"gif": gif_name, "label": label}
-        manifest["state_mapping"] = state_mapping
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-
     def save_trajectory(self):
         if not self.current_path:
             print("没有路径可保存！")
@@ -310,13 +267,6 @@ class TrajectoryRecorder(QWidget):
         try:
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            self._update_manifest(
-                manifest_path=save_dir / "manifest.json",
-                filename=filename,
-                duration_seconds=float(self.current_path[-1]["t"]),
-                entry_direction=entry_direction,
-                states_used=states_used,
-            )
             print(f"✅ 成功保存轨迹到: {filepath.absolute()}")
             QMessageBox.information(
                 self,

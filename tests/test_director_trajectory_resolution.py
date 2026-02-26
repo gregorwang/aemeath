@@ -23,35 +23,25 @@ class _TrajectoryResolutionSubject:
 
 
 class DirectorTrajectoryResolutionTest(unittest.TestCase):
-    def test_auto_selects_latest_recorded_path(self) -> None:
+    def test_resolves_default_file_under_base_recorded_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            recorded = root / "recorded_paths"
-            recorded.mkdir(parents=True, exist_ok=True)
-            older = recorded / "trajectory_1000.json"
-            newer = recorded / "trajectory_2000.json"
-            older.write_text("{}", encoding="utf-8")
-            newer.write_text("{}", encoding="utf-8")
-            os.utime(older, (1_700_000_000, 1_700_000_000))
-            os.utime(newer, (1_700_000_100, 1_700_000_100))
+            default = root / "recorded_paths" / Director.VOICE_TRAJECTORY_FILE
+            default.parent.mkdir(parents=True, exist_ok=True)
+            default.write_text("{}", encoding="utf-8")
 
             subject = _TrajectoryResolutionSubject(root)
             with patch.dict(os.environ, {"CYBERCOMPANION_TRAJECTORY_PATH": ""}, clear=False):
-                with patch("core.director.Path.cwd", return_value=root):
-                    with patch("core.director.get_user_data_dir", return_value=root / "userdata"):
-                        with patch("core.director.sys.executable", str(root / "python.exe")):
-                            resolved = Director._resolve_voice_trajectory_path(subject)
+                resolved = Director._resolve_voice_trajectory_path(subject)
 
-            self.assertEqual(resolved, newer)
+            self.assertEqual(resolved, default)
 
-    def test_env_path_has_higher_priority_than_latest_scan(self) -> None:
+    def test_env_file_has_higher_priority_than_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            recorded = root / "recorded_paths"
-            recorded.mkdir(parents=True, exist_ok=True)
-            latest = recorded / "trajectory_9999.json"
-            latest.write_text("{}", encoding="utf-8")
-            os.utime(latest, (1_700_000_200, 1_700_000_200))
+            default = root / "recorded_paths" / Director.VOICE_TRAJECTORY_FILE
+            default.parent.mkdir(parents=True, exist_ok=True)
+            default.write_text("{}", encoding="utf-8")
 
             env_file = root / "custom_env.json"
             env_file.write_text("{}", encoding="utf-8")
@@ -62,27 +52,32 @@ class DirectorTrajectoryResolutionTest(unittest.TestCase):
                 {"CYBERCOMPANION_TRAJECTORY_PATH": str(env_file)},
                 clear=False,
             ):
-                with patch("core.director.Path.cwd", return_value=root):
-                    with patch("core.director.get_user_data_dir", return_value=root / "userdata"):
-                        with patch("core.director.sys.executable", str(root / "python.exe")):
-                            resolved = Director._resolve_voice_trajectory_path(subject)
+                resolved = Director._resolve_voice_trajectory_path(subject)
 
             self.assertEqual(resolved, env_file)
 
-    def test_falls_back_to_default_filename_when_no_recorded_paths_exist(self) -> None:
+    def test_env_directory_resolves_default_filename(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            fallback = root / Director.VOICE_TRAJECTORY_FILE
-            fallback.write_text("{}", encoding="utf-8")
+            env_dir = root / "custom_dir"
+            env_dir.mkdir(parents=True, exist_ok=True)
+            env_file = env_dir / Director.VOICE_TRAJECTORY_FILE
+            env_file.write_text("{}", encoding="utf-8")
 
             subject = _TrajectoryResolutionSubject(root)
-            with patch.dict(os.environ, {"CYBERCOMPANION_TRAJECTORY_PATH": ""}, clear=False):
-                with patch("core.director.Path.cwd", return_value=root):
-                    with patch("core.director.get_user_data_dir", return_value=root / "userdata"):
-                        with patch("core.director.sys.executable", str(root / "python.exe")):
-                            resolved = Director._resolve_voice_trajectory_path(subject)
+            with patch.dict(os.environ, {"CYBERCOMPANION_TRAJECTORY_PATH": str(env_dir)}, clear=False):
+                resolved = Director._resolve_voice_trajectory_path(subject)
 
-            self.assertEqual(resolved, fallback)
+            self.assertEqual(resolved, env_file)
+
+    def test_returns_none_when_no_candidate_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subject = _TrajectoryResolutionSubject(root)
+            with patch.dict(os.environ, {"CYBERCOMPANION_TRAJECTORY_PATH": ""}, clear=False):
+                resolved = Director._resolve_voice_trajectory_path(subject)
+
+            self.assertIsNone(resolved)
 
 
 if __name__ == "__main__":
