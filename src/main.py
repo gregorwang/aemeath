@@ -24,7 +24,7 @@ try:
     from ai.screen_commentator import ScreenCommentator
     from core.asset_manager import AssetManager
     from core.audio_manager import AudioManager
-    from core.audio_detector import AudioDetector
+    from core.audio_output_monitor import AudioOutputMonitor
     from core.character_loader import CharacterLoader
     from core.command_matcher import VoiceCommandMatcher
     from core.config_manager import ConfigManager
@@ -50,7 +50,7 @@ except ModuleNotFoundError:
     from .ai.screen_commentator import ScreenCommentator
     from .core.asset_manager import AssetManager
     from .core.audio_manager import AudioManager
-    from .core.audio_detector import AudioDetector
+    from .core.audio_output_monitor import AudioOutputMonitor
     from .core.character_loader import CharacterLoader
     from .core.command_matcher import VoiceCommandMatcher
     from .core.config_manager import ConfigManager
@@ -309,9 +309,10 @@ def main() -> int:
         characters_dir=characters_root,  # characters/ dir contains state1-7.gif
         particle_manager=particle_manager,
     )
-    audio_output_monitor = AudioDetector(
-        poll_interval_ms=200,
-        threshold=0.01,
+    audio_output_monitor = AudioOutputMonitor(
+        poll_interval_ms=500,
+        ignore_current_process_audio=True,
+        prefer_media_sessions=True,
     )
     
     # --- Idle Invasion ---

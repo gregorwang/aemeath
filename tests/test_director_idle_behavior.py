@@ -70,11 +70,21 @@ class _IdleBehaviorSubject:
 
 
 class _ProlongedIdleTimerStub:
-    def __init__(self) -> None:
+    def __init__(self, active: bool = False) -> None:
+        self._active = bool(active)
         self.start_calls = 0
+        self.stop_calls = 0
+
+    def isActive(self) -> bool:
+        return self._active
 
     def start(self) -> None:
         self.start_calls += 1
+        self._active = True
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self._active = False
 
 
 class _EntityWindowStub:
@@ -86,11 +96,14 @@ class _EntityWindowStub:
 
 
 class _HiddenEnterSubject:
-    def __init__(self) -> None:
+    def __init__(self, *, idle_invasion_enabled: bool = False, timer_active: bool = False) -> None:
         self._pending_idle_script = object()
         self._idle_monitor = None
+        self._config = SimpleNamespace(
+            idle_invasion=SimpleNamespace(enabled=bool(idle_invasion_enabled))
+        )
         self._entity_window = _EntityWindowStub()
-        self._prolonged_idle_timer = _ProlongedIdleTimerStub()
+        self._prolonged_idle_timer = _ProlongedIdleTimerStub(active=timer_active)
         self._current_ascii_template = "placeholder"
         self.stop_auto_dismiss_calls = 0
         self.stop_camera_calls = 0
@@ -123,7 +136,7 @@ class DirectorIdleBehaviorTest(unittest.TestCase):
         self.assertEqual(subject._state_machine.transitions, [])
         self.assertEqual(subject.behavior_calls, [])
 
-    def test_idle_invasion_path_rearms_idle_monitor(self) -> None:
+    def test_idle_invasion_path_does_not_rearm_or_reset_idle_monitor(self) -> None:
         subject = _IdleBehaviorSubject(
             idle_invasion_enabled=True,
             attach_idle_monitor=True,
@@ -134,8 +147,8 @@ class DirectorIdleBehaviorTest(unittest.TestCase):
         self.assertIsNotNone(subject._idle_monitor)
         self.assertEqual(subject._state_machine.transitions, [])
         self.assertEqual(subject.behavior_calls, [])
-        self.assertEqual(subject.jitter_arm_calls, 1)
-        self.assertEqual(subject._idle_monitor.reset_calls, 1)
+        self.assertEqual(subject.jitter_arm_calls, 0)
+        self.assertEqual(subject._idle_monitor.reset_calls, 0)
 
     def test_dnd_mode_blocks_auto_idle_summon(self) -> None:
         subject = _IdleBehaviorSubject(
@@ -184,6 +197,15 @@ class DirectorIdleBehaviorTest(unittest.TestCase):
         self.assertEqual(subject.behavior_calls, [(BehaviorMode.BUSY, False)])
         self.assertEqual(subject._entity_window.hide_calls, 1)
         self.assertEqual(subject._prolonged_idle_timer.start_calls, 1)
+        self.assertEqual(subject._prolonged_idle_timer.stop_calls, 0)
+
+    def test_enter_hidden_skips_prolonged_idle_timer_when_idle_invasion_enabled(self) -> None:
+        subject = _HiddenEnterSubject(idle_invasion_enabled=True, timer_active=True)
+
+        Director._enter_hidden(subject)
+
+        self.assertEqual(subject._prolonged_idle_timer.start_calls, 0)
+        self.assertEqual(subject._prolonged_idle_timer.stop_calls, 1)
 
 
 if __name__ == "__main__":

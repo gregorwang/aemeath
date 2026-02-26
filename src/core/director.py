@@ -200,6 +200,7 @@ class Director(QObject):
         self._gif_state_mapper = gif_state_mapper
         self._audio_output_monitor = audio_output_monitor
         self._idle_invasion_controller = idle_invasion_controller
+        self._legacy_idle_signal_connected = False
         self._auto_screen_commentary_enabled = bool(
             getattr(getattr(app_config, "screen_commentary", None), "auto_enabled", False)
         )
@@ -322,13 +323,38 @@ class Director(QObject):
         return self._behavior_mode
 
     def bind_idle_monitor(self, idle_monitor: IdleMonitor) -> None:
+        if self._idle_monitor is not None and self._legacy_idle_signal_connected:
+            try:
+                self._idle_monitor.user_idle_confirmed.disconnect(self.on_user_idle)
+            except Exception:
+                pass
+            self._legacy_idle_signal_connected = False
         self._idle_monitor = idle_monitor
-        idle_monitor.user_idle_confirmed.connect(self.on_user_idle)
         idle_monitor.user_active_detected.connect(self.on_user_active)
         idle_monitor.idle_time_updated.connect(self._on_idle_time_updated)
+        self._sync_legacy_idle_binding()
         self._arm_idle_threshold_with_jitter()
         idle_monitor.reset_to_standby()
         Director._sync_resident_visibility(self)
+
+    def _is_idle_invasion_enabled(self) -> bool:
+        return bool(getattr(getattr(self._config, "idle_invasion", None), "enabled", False))
+
+    def _sync_legacy_idle_binding(self) -> None:
+        if self._idle_monitor is None:
+            self._legacy_idle_signal_connected = False
+            return
+        should_connect = not Director._is_idle_invasion_enabled(self)
+        if should_connect and not self._legacy_idle_signal_connected:
+            self._idle_monitor.user_idle_confirmed.connect(self.on_user_idle)
+            self._legacy_idle_signal_connected = True
+            return
+        if (not should_connect) and self._legacy_idle_signal_connected:
+            try:
+                self._idle_monitor.user_idle_confirmed.disconnect(self.on_user_idle)
+            except Exception:
+                pass
+            self._legacy_idle_signal_connected = False
 
     @Slot()
     def on_user_idle(self) -> None:
@@ -350,11 +376,8 @@ class Director(QObject):
                 self._idle_monitor.reset_to_standby()
                 self._arm_idle_threshold_with_jitter()
             return
-        if bool(getattr(getattr(self._config, "idle_invasion", None), "enabled", False)):
+        if Director._is_idle_invasion_enabled(self):
             self.LOGGER.info("[IdleBehavior] Legacy idle summon skipped: idle_invasion enabled")
-            if self._idle_monitor is not None:
-                self._idle_monitor.reset_to_standby()
-                self._arm_idle_threshold_with_jitter()
             return
 
         self._set_behavior_mode(BehaviorMode.IDLE, apply_visual=False)
@@ -673,7 +696,10 @@ class Director(QObject):
             and not self._self_playback_active
         ):
             self._on_audio_output_started()
+        self._sync_legacy_idle_binding()
         self._arm_idle_threshold_with_jitter()
+        if Director._is_idle_invasion_enabled(self) and self._prolonged_idle_timer.isActive():
+            self._prolonged_idle_timer.stop()
         self._sync_auto_screen_commentary_timer()
         self._sync_periodic_scan_timer()
 
@@ -792,8 +818,12 @@ class Director(QObject):
             self._arm_idle_threshold_with_jitter()
         # Clear cached script so each hidden->engaged cycle can reselect by current time/cooldown.
         self._pending_idle_script = None
-        # Start prolonged idle timer when going hidden
-        self._prolonged_idle_timer.start()
+        # Keep prolonged-idle particles mutually exclusive with idle invasion.
+        if Director._is_idle_invasion_enabled(self):
+            if self._prolonged_idle_timer.isActive():
+                self._prolonged_idle_timer.stop()
+        else:
+            self._prolonged_idle_timer.start()
         self._current_ascii_template = ""
         self._set_behavior_mode(BehaviorMode.BUSY, apply_visual=False)
 
@@ -1637,6 +1667,8 @@ class Director(QObject):
     @Slot()
     def _on_prolonged_idle(self) -> None:
         """Called when user has been idle for an extended period."""
+        if Director._is_idle_invasion_enabled(self):
+            return
         if self._gif_state_mapper and self._state_machine.current_state == EntityState.HIDDEN:
             self._gif_state_mapper.on_prolonged_idle()
             # Re-arm for another cycle
