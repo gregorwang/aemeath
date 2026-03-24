@@ -57,6 +57,11 @@ jobs:
         run: |
           .\tools\cpp\smoke_check_cpp.ps1 -ExePath out/package/windows-ninja-release/CyberCompanionCpp.exe
 
+      - name: Check Release Metadata
+        shell: powershell
+        run: |
+          .\tools\cpp\check_release_metadata.ps1
+
       - name: Install Inno Setup
         shell: powershell
         run: |
