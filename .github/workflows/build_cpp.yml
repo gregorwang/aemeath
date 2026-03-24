@@ -73,6 +73,11 @@ jobs:
           $buildOutputDir = (Resolve-Path "out/package/windows-ninja-release").Path
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DBuildOutputDir=$buildOutputDir" "installer\\cybercompanioncpp.iss"
 
+      - name: Write Release Manifest
+        shell: powershell
+        run: |
+          .\tools\cpp\write_release_manifest.ps1
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
