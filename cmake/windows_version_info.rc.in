@@ -1,0 +1,33 @@
+#include <winresrc.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @AEMEATH_APP_VERSION_COMMA@
+ PRODUCTVERSION @AEMEATH_APP_VERSION_COMMA@
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "Aemeath\0"
+            VALUE "FileDescription", "CyberCompanion native Qt runtime\0"
+            VALUE "FileVersion", "@AEMEATH_APP_VERSION@\0"
+            VALUE "InternalName", "CyberCompanionCpp\0"
+            VALUE "OriginalFilename", "CyberCompanionCpp.exe\0"
+            VALUE "ProductName", "CyberCompanionCpp\0"
+            VALUE "ProductVersion", "@AEMEATH_APP_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

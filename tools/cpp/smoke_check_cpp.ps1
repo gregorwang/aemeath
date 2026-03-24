@@ -34,6 +34,15 @@ if ([string]::IsNullOrWhiteSpace($versionManifest.commit_hash) -or $versionManif
   throw "Smoke check failed: version.json commit_hash was not resolved."
 }
 
+$exeVersion = (Get-Item $resolvedExePath).VersionInfo.FileVersion
+if ([string]::IsNullOrWhiteSpace($exeVersion)) {
+  throw "Smoke check failed: executable file version is missing."
+}
+$normalizedExeVersion = ($exeVersion -split '\s+')[0]
+if ($normalizedExeVersion -ne $versionManifest.version) {
+  throw "Smoke check failed: executable file version '$normalizedExeVersion' does not match version.json '$($versionManifest.version)'."
+}
+
 $existing = Get-Process CyberCompanionCpp -ErrorAction SilentlyContinue
 if ($existing) {
   throw "CyberCompanionCpp is already running. Stop the existing process before smoke check."
