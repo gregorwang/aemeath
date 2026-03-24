@@ -275,6 +275,11 @@ if(BUILD_TESTING)
             Qt6::Test
     )
 
+    target_compile_definitions(CyberCompanionCppVersionTests
+        PRIVATE
+            AEMEATH_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     qt_add_executable(CyberCompanionCppPresenceTests
         tests_cpp/test_presence_detector.cpp
         src_cpp/runtime/presence_detector.cpp

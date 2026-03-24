@@ -2,6 +2,10 @@
 
 #include "runtime/version_manifest.h"
 
+#ifndef AEMEATH_SOURCE_DIR
+#error "AEMEATH_SOURCE_DIR must be defined for CyberCompanionCppVersionTests"
+#endif
+
 class VersionManifestTest : public QObject
 {
     Q_OBJECT
@@ -10,6 +14,7 @@ private Q_SLOTS:
     void loadsLocalManifest();
     void parsesGitHubReleasePayload();
     void comparesVersionsNumerically();
+    void nativeVersionConstantsStayInSync();
 };
 
 void VersionManifestTest::loadsLocalManifest()
@@ -59,6 +64,34 @@ void VersionManifestTest::comparesVersionsNumerically()
     QCOMPARE(VersionManifest::compareVersions(QStringLiteral("1.2.3"), QStringLiteral("1.2.3")), 0);
     QVERIFY(VersionManifest::compareVersions(QStringLiteral("v1.2.3"), QStringLiteral("1.2.4")) < 0);
     QVERIFY(VersionManifest::compareVersions(QStringLiteral("1.10.0"), QStringLiteral("1.2.9")) > 0);
+}
+
+void VersionManifestTest::nativeVersionConstantsStayInSync()
+{
+    const QString sourceRoot = QString::fromUtf8(AEMEATH_SOURCE_DIR);
+
+    QFile appConfigFile(sourceRoot + QStringLiteral("/src_cpp/runtime/app_config.h"));
+    QVERIFY2(appConfigFile.open(QIODevice::ReadOnly | QIODevice::Text), "Failed to open app_config.h");
+    const QString appConfigText = QString::fromUtf8(appConfigFile.readAll());
+    appConfigFile.close();
+
+    QFile installerFile(sourceRoot + QStringLiteral("/installer/cybercompanioncpp.iss"));
+    QVERIFY2(installerFile.open(QIODevice::ReadOnly | QIODevice::Text), "Failed to open cybercompanioncpp.iss");
+    const QString installerText = QString::fromUtf8(installerFile.readAll());
+    installerFile.close();
+
+    const QRegularExpression appVersionPattern(
+        QStringLiteral("QString version = QStringLiteral\\(\"([^\"]+)\"\\)"));
+    const QRegularExpression installerVersionPattern(
+        QStringLiteral("#define\\s+MyAppVersion\\s+\"([^\"]+)\""));
+
+    const QRegularExpressionMatch appVersionMatch = appVersionPattern.match(appConfigText);
+    const QRegularExpressionMatch installerVersionMatch = installerVersionPattern.match(installerText);
+
+    QVERIFY2(appVersionMatch.hasMatch(), "Failed to parse native app version.");
+    QVERIFY2(installerVersionMatch.hasMatch(), "Failed to parse installer version.");
+
+    QCOMPARE(installerVersionMatch.captured(1), appVersionMatch.captured(1));
 }
 
 QTEST_MAIN(VersionManifestTest)
