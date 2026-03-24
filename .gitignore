@@ -20,6 +20,8 @@ venv/
 .vscode/
 .idea/
 *.swp
+out/
+CMakeUserPresets.json
 
 # OS
 Thumbs.db

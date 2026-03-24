@@ -1,0 +1,68 @@
+name: Build Native C++ Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src_cpp/**"
+      - "tests_cpp/**"
+      - "tools/cpp/**"
+      - "installer/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - ".github/workflows/build_cpp.yml"
+
+jobs:
+  build-windows-cpp:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.6.3"
+          arch: "win64_mingw"
+          tools: "tools_mingw1310 tools_ninja"
+          cache: true
+
+      - name: Configure, Build, Test
+        shell: powershell
+        run: |
+          $env:QT_ROOT = $env:QT_ROOT_DIR
+          $env:CC = "gcc.exe"
+          $env:CXX = "g++.exe"
+          .\tools\cpp\build_cpp.ps1 -Preset windows-ninja-release -RunTests
+
+      - name: Stage Qt Runtime
+        shell: powershell
+        run: |
+          $env:QT_ROOT = $env:QT_ROOT_DIR
+          .\tools\cpp\deploy_cpp.ps1 -BuildDir out/build/windows-ninja-release -DeployMode Release -OutputDir out/package/windows-ninja-release
+
+      - name: Smoke Check Staged Package
+        shell: powershell
+        run: |
+          .\tools\cpp\smoke_check_cpp.ps1 -ExePath out/package/windows-ninja-release/CyberCompanionCpp.exe
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Build Installer
+        shell: powershell
+        run: |
+          $buildOutputDir = (Resolve-Path "out/package/windows-ninja-release").Path
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DBuildOutputDir=$buildOutputDir" "installer\\cybercompanioncpp.iss"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cybercompanioncpp-windows
+          path: |
+            out/package/windows-ninja-release/**
+            out/installer/**

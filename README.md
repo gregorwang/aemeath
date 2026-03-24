@@ -75,6 +75,44 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
+## 🧱 原生 C++ 运行时
+
+仓库现已包含并行的 `Qt 6 + CMake` 原生运行时，位于 `src_cpp/`。
+
+当前状态：
+
+- 原生 `Qt 6 + CMake` 应用壳、单实例、日志、配置、自启动和更新检查
+- 原生 tray、角色窗口、脚本登场、idle invasion、右键菜单和角色包切换
+- 原生音频播放、`edge-tts`、语音输入、语音命令、屏幕评论与运行时状态摘要
+- 原生摄像头 presence / gaze / periodic scan、全屏暂停、常驻模式、DND 与 idle 行为编排
+- 原生设置页、CI 构建、`CTest`、`windeployqt`、smoke-check 与 Inno Setup 打包
+- legacy `google/google_webspeech` ASR 配置会自动迁移到 `zhipu_asr`
+- legacy 非 `edge` 的 TTS 配置会自动迁移到 `edge-tts`
+
+当前推荐命令：
+
+```powershell
+cmake --preset windows-ninja-debug
+cmake --build --preset build-windows-ninja-debug
+ctest --test-dir out/build/windows-ninja-debug --output-on-failure
+
+cmake --preset windows-ninja-release
+cmake --build --preset build-windows-ninja-release
+ctest --preset test-windows-ninja-release --output-on-failure
+
+.\tools\cpp\deploy_cpp.ps1 -BuildDir out/build/windows-ninja-release -DeployMode Release -OutputDir out/package/windows-ninja-release
+.\tools\cpp\smoke_check_cpp.ps1
+```
+
+参考：
+
+- `CMakeLists.txt`
+- `CMakePresets.json`
+- `docs/cpp_phase0.md`
+- `tools/cpp/build_cpp.ps1`
+- `tools/cpp/deploy_cpp.ps1`
+- `tools/cpp/smoke_check_cpp.ps1`
+
 ## ✅ 测试
 
 ```powershell
@@ -112,3 +150,18 @@ pyinstaller --clean --noconfirm build.spec
 - `base_url` 可写成 `https://host` 或 `https://host/v1`（程序会标准化）
 - LLM Key 环境变量回退：`OPENAI_API_KEY -> POLOAI_API_KEY`
 - TTS 使用 `edge-tts`
+
+## 🗣 原生语音命令
+
+- 纯 C++ 运行时现已覆盖主要 tray 用户入口：`设置`、`使用指南`、`编辑台词`、`复制最近日志`、`打开配置/数据/日志目录`、`反馈问题`、`关于`
+- 纯 C++ 运行时现已支持 `检查更新`，会读取本地 `version.json/update_url` 并请求最新 release
+- 角色切换支持 `characters/*/manifest.json` 的 `name` 与 `aliases`
+- 角色窗口右键菜单已独立于 tray 总菜单，保留更贴近 Python 版的常用交互动作集合
+- 原生设置页现已支持 `测试 API 连接`
+- 原生配置现已覆盖 `behavior.auto_start_on_login` 和 `trigger.jitter_range_seconds`
+- 原生配置现已按 Python 的 `audio / vision / wakeup / behavior` schema 落盘
+- `appearance.ascii_width / font_size_px` 现已作用到原生角色窗口
+- legacy `google` ASR 配置进入原生版时会自动迁移到 `zhipu_asr`
+
+当前原生运行时说明见 [docs/cpp_runtime.md](docs/cpp_runtime.md)。
+迁移历史保留在 [docs/cpp_phase0.md](docs/cpp_phase0.md)。
