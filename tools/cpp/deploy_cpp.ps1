@@ -42,6 +42,17 @@ function Read-VersionMetadata {
   }
 }
 
+function Resolve-GitCommitHash {
+  try {
+    $hash = (git rev-parse --short=12 HEAD 2>$null | Select-Object -First 1).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($hash)) {
+      return $hash
+    }
+  } catch {
+  }
+  return $null
+}
+
 $windeployqt = Resolve-QtTool "windeployqt.exe"
 $candidateTargets = @()
 if ($Configuration) {
@@ -73,12 +84,13 @@ foreach ($resourceDir in @("assets", "characters", "recorded_paths")) {
 
 $existingVersion = Read-VersionMetadata
 $appVersion = Resolve-CppAppVersion
+$gitCommitHash = Resolve-GitCommitHash
 $stagedVersion = [ordered]@{
   version = $appVersion
   update_url = if ($existingVersion.Contains("update_url")) { [string]$existingVersion["update_url"] } else { "https://api.github.com/repos/gregorwang/aemeath/releases/latest" }
   build_date = Get-Date -Format "yyyy-MM-dd"
   python_version = if ($existingVersion.Contains("python_version")) { [string]$existingVersion["python_version"] } else { "" }
-  commit_hash = if ($existingVersion.Contains("commit_hash")) { [string]$existingVersion["commit_hash"] } else { "unknown" }
+  commit_hash = if ($gitCommitHash) { $gitCommitHash } elseif ($existingVersion.Contains("commit_hash")) { [string]$existingVersion["commit_hash"] } else { "unknown" }
   phase = $appVersion
 }
 $stagedVersion | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $resolvedOutputDir "version.json") -Encoding UTF8

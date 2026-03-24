@@ -20,6 +20,20 @@ if (-not (Test-Path $resolvedVersionFilePath)) {
   throw "Smoke check failed: version file not found at $resolvedVersionFilePath"
 }
 
+$versionManifest = Get-Content $resolvedVersionFilePath -Raw | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($versionManifest.version)) {
+  throw "Smoke check failed: version.json is missing a version."
+}
+if ([string]::IsNullOrWhiteSpace($versionManifest.phase)) {
+  throw "Smoke check failed: version.json is missing a phase/version marker."
+}
+if ($versionManifest.phase -ne $versionManifest.version) {
+  throw "Smoke check failed: version.json phase '$($versionManifest.phase)' does not match version '$($versionManifest.version)'."
+}
+if ([string]::IsNullOrWhiteSpace($versionManifest.commit_hash) -or $versionManifest.commit_hash -eq "unknown") {
+  throw "Smoke check failed: version.json commit_hash was not resolved."
+}
+
 $existing = Get-Process CyberCompanionCpp -ErrorAction SilentlyContinue
 if ($existing) {
   throw "CyberCompanionCpp is already running. Stop the existing process before smoke check."
