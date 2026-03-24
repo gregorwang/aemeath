@@ -14,14 +14,14 @@
 - 屏幕解读：截图后交给多模态 LLM 生成中文短评并语音播报
 - 语音能力：支持唤醒词或 `Ctrl+B` 单次按键转写
 - 视觉能力（可选）：摄像头人脸/表情检测、在场状态推断
-- 工程化完整：测试、PyInstaller 打包、Release 更新检查、GitHub Actions
+- 工程化完整：原生 `CTest`、Inno Setup 安装包、Release 更新检查、GitHub Actions
 
 ## 🎮 快速上手
 
 面向第一次使用的用户（不是开发环境）。
 
-1. 下载并解压 Release 包（或运行你本地构建的 `dist/CyberCompanion`）。
-2. 启动 `CyberCompanion-core.exe`。
+1. 下载并运行 Release 安装包 `CyberCompanionCppSetup.exe`，或直接使用本地 staged 包 `out/package/windows-ninja-release/`。
+2. 启动 `CyberCompanionCpp.exe`。
 3. 看系统托盘图标，右键可用常见功能：
    - `立即召唤`
    - `你在看什么？`（手动触发一次屏幕解读）
@@ -66,7 +66,17 @@
 - 远程请求仅在你配置 API Key 且启用相关功能后发生。
 - 不要把真实密钥提交到 `config.json` / `version.json`。
 
-## 🚀 开发运行
+## 🚀 开发运行（默认原生 C++）
+
+```powershell
+cmake --preset windows-ninja-debug
+cmake --build --preset build-windows-ninja-debug
+ctest --test-dir out/build/windows-ninja-debug --output-on-failure
+
+.\out\build\windows-ninja-debug\CyberCompanionCpp.exe
+```
+
+## 🐍 Legacy Python 开发运行（仅兼容维护）
 
 ```powershell
 python -m venv .venv
@@ -77,7 +87,7 @@ python src/main.py
 
 ## 🧱 原生 C++ 运行时
 
-仓库现已包含并行的 `Qt 6 + CMake` 原生运行时，位于 `src_cpp/`。
+仓库现已将 `Qt 6 + CMake` 原生运行时作为默认桌面入口，位于 `src_cpp/`。Python 入口保留为 legacy 兼容路径。
 
 当前状态：
 
@@ -113,7 +123,15 @@ ctest --preset test-windows-ninja-release --output-on-failure
 - `tools/cpp/deploy_cpp.ps1`
 - `tools/cpp/smoke_check_cpp.ps1`
 
-## ✅ 测试
+## ✅ 原生测试
+
+```powershell
+cmake --preset windows-ninja-release
+cmake --build --preset build-windows-ninja-release
+ctest --preset test-windows-ninja-release --output-on-failure
+```
+
+## ✅ Legacy Python 测试
 
 ```powershell
 python -m venv .venv
@@ -122,7 +140,21 @@ pip install -r requirements-dev.txt
 pytest tests/ -v --tb=short
 ```
 
-## 📦 打包（PyInstaller）
+## 📦 原生打包（默认发布链）
+
+```powershell
+.\tools\cpp\deploy_cpp.ps1 -BuildDir out/build/windows-ninja-release -DeployMode Release -OutputDir out/package/windows-ninja-release
+.\tools\cpp\smoke_check_cpp.ps1
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\cybercompanioncpp.iss"
+```
+
+GitHub Release 现在默认上传：
+
+- `CyberCompanionCppSetup.exe`
+- 原生 staged package zip
+- `release_manifest.json`
+
+## 📦 Legacy Python 打包（仅兼容维护）
 
 ```powershell
 python -m venv build_env

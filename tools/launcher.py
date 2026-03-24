@@ -120,11 +120,18 @@ def download_and_apply_update(update_info: dict) -> bool:
 
 
 def launch_core() -> None:
-    core_exe = CORE_DIR / "CyberCompanion-core.exe"
-    if not core_exe.exists():
-        print("[Launcher] 错误: 核心程序不存在")
-        sys.exit(1)
-    os.execv(str(core_exe), [str(core_exe)])
+    candidates = [
+        CORE_DIR / "CyberCompanionCpp.exe",
+        CORE_DIR / "CyberCompanion-core.exe",
+    ]
+
+    for core_exe in candidates:
+        if core_exe.exists():
+            os.execv(str(core_exe), [str(core_exe)])
+
+    searched = ", ".join(str(path.name) for path in candidates)
+    print(f"[Launcher] 错误: 核心程序不存在，已检查 {searched}")
+    sys.exit(1)
 
 
 def main() -> None:

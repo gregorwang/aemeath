@@ -1,6 +1,6 @@
 # Native C++ Runtime
 
-`CyberCompanionCpp` is the native `Qt 6 + CMake + MinGW` desktop runtime that now runs in parallel with the original Python entrypoint.
+`CyberCompanionCpp` is now the primary desktop runtime for this repository. The original Python entrypoint remains available as a legacy compatibility path, but release packaging, CI validation, and installer output now default to the native `Qt 6 + CMake + MinGW` application.
 
 ## Scope
 
@@ -34,6 +34,16 @@ ctest --test-dir out/build/windows-ninja-release --output-on-failure
 .\tools\cpp\smoke_check_cpp.ps1
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\cybercompanioncpp.iss"
 ```
+
+## Release Pipeline
+
+- `.github/workflows/build_cpp.yml` is the default release workflow.
+- Tag builds upload:
+  - `CyberCompanionCppSetup.exe`
+  - native staged package zip
+  - `release_manifest.json`
+- `tools/cpp/write_release_notes.ps1` generates the GitHub Release body from the staged native package metadata.
+- `.github/workflows/build.yml` remains as a manual legacy Python runtime build only.
 
 ## Current Runtime Guarantees
 

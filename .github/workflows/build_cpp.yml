@@ -3,6 +3,8 @@ name: Build Native C++ Runtime
 on:
   workflow_dispatch:
   push:
+    tags:
+      - "v*"
     paths:
       - "src_cpp/**"
       - "tests_cpp/**"
@@ -20,6 +22,9 @@ on:
       - "CMakeLists.txt"
       - "CMakePresets.json"
       - ".github/workflows/build_cpp.yml"
+
+permissions:
+  contents: write
 
 jobs:
   build-windows-cpp:
@@ -78,6 +83,23 @@ jobs:
         run: |
           .\tools\cpp\write_release_manifest.ps1
 
+      - name: Write Release Notes
+        shell: powershell
+        run: |
+          .\tools\cpp\write_release_notes.ps1
+
+      - name: Create Release Archive
+        shell: powershell
+        run: |
+          $version = (Get-Content out/package/windows-ninja-release/version.json -Raw | ConvertFrom-Json).version
+          $archiveName = "CyberCompanionCpp_${version}_windows_x64.zip"
+          $archivePath = Join-Path "out/installer" $archiveName
+          if (Test-Path $archivePath) {
+            Remove-Item $archivePath -Force
+          }
+          Compress-Archive -Path "out/package/windows-ninja-release\*" -DestinationPath $archivePath -Force
+          "CPP_RELEASE_ARCHIVE=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -85,3 +107,17 @@ jobs:
           path: |
             out/package/windows-ninja-release/**
             out/installer/**
+
+      - name: Create GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: out/installer/release_notes.md
+          files: |
+            ${{ env.CPP_RELEASE_ARCHIVE }}
+            out/installer/CyberCompanionCppSetup.exe
+            out/installer/release_manifest.json
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
